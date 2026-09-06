@@ -1,0 +1,14 @@
+{
+  "name": "persian-doc-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot that converts messy pasted text into a clean, RTL-formatted Persian Word document",
+  "main": "src/bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/bot.js"
+  },
+  "dependencies": {
+    "docx": "^9.0.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
