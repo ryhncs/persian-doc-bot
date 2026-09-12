@@ -45,8 +45,8 @@ Both features share the same `docx` generation pipeline
 2. Bot shows "⏳ در حال پردازش پیام صوتی..." immediately.
 3. Bot downloads the audio via the Telegram Bot API.
 4. Bot transcribes it with Groq's Whisper endpoint (raw OGG/OPUS first; if
-   Groq rejects the format, it transcodes to MP3 with `ffmpeg-static` and
-   retries once — see `src/services/transcribe.js`).
+   Groq rejects the format, it transcodes to 16kHz mono WAV with
+   `ffmpeg-static` and retries once — see `src/services/transcribe.js`).
 5. Bot summarizes the transcript in Persian via a Groq Llama model
    (`src/services/summarize.js`), preserving names/numbers/dates and staying
    in Persian even for mixed Persian/English speech.
@@ -71,7 +71,7 @@ src/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
     summarize.js               Persian summarization prompt (swap LLM provider here)
-    audioConvert.js             OGG → MP3 via ffmpeg-static
+    audioConvert.js             OGG → 16kHz mono WAV via ffmpeg-static
     telegramFile.js               Downloads a Telegram file by file_id
     sessionStore.js                 In-memory transcript/summary store for button callbacks
     rateLimiter.js                   Per-user daily + global per-minute limits
