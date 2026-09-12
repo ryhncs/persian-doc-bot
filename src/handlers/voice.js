@@ -35,6 +35,14 @@ async function handleVoiceMessage(bot, msg) {
     return;
   }
 
+  console.log("[voice] received voice message", {
+    chatId,
+    userId,
+    telegramReportedDurationSeconds: media.duration,
+    telegramReportedFileSizeBytes: media.file_size,
+    mimeType: media.mime_type,
+  });
+
   if (media.duration > config.MAX_VOICE_DURATION_SECONDS) {
     await bot.sendMessage(chatId, tooLongMessage(config.MAX_VOICE_DURATION_SECONDS));
     return;
@@ -57,6 +65,11 @@ async function handleVoiceMessage(bot, msg) {
     await bot.sendChatAction(chatId, "typing");
 
     const { buffer } = await downloadTelegramFile(bot, media.file_id);
+    console.log("[voice] downloaded audio from Telegram", {
+      downloadedBytes: buffer.length,
+      telegramReportedFileSizeBytes: media.file_size,
+      matchesReportedSize: media.file_size ? buffer.length === media.file_size : "unknown (not reported)",
+    });
 
     const transcript = await transcribeAudio(buffer);
     if (!transcript || !transcript.trim()) {

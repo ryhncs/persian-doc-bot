@@ -4,20 +4,37 @@ const { convertOggToWav } = require("./audioConvert");
 const { buildWhisperPrompt } = require("./whisperPrompt");
 
 async function callWhisper(buffer, filename, mimeType) {
+  const prompt = buildWhisperPrompt();
+  const model = config.WHISPER_MODEL;
+  const language = "fa";
+  const temperature = "0";
+
+  // Dump every param actually going to Groq right before the call, so a
+  // bad transcription can be checked against what was really sent (e.g.
+  // ruling out a corrupted/oversized prompt, wrong model, or a field
+  // silently clobbering another) instead of just what the code intends.
+  console.log("[transcribe] groq request", {
+    model,
+    language,
+    temperature,
+    promptByteLength: Buffer.byteLength(prompt, "utf8"),
+    fileField: { filename, mimeType, bytes: buffer.length },
+  });
+
   const form = new FormData();
   form.append("file", new Blob([buffer], { type: mimeType }), filename);
-  form.append("model", config.WHISPER_MODEL);
+  form.append("model", model);
   form.append("response_format", "json");
-  form.append("prompt", buildWhisperPrompt());
+  form.append("prompt", prompt);
   // Voice messages are Persian (with code-switched English) — pinning the
   // language skips Whisper's auto-detection, which otherwise regularly
   // misfires on short/mixed-language clips and visibly hurts accuracy even
   // on the pure-Persian portions.
-  form.append("language", "fa");
+  form.append("language", language);
   // Deterministic decoding: temperature 0 always takes Whisper's
   // highest-probability token instead of sampling, which avoids
   // "creative"/hallucinated wording on unclear audio.
-  form.append("temperature", "0");
+  form.append("temperature", temperature);
 
   return groqFetch("/audio/transcriptions", {
     method: "POST",
@@ -41,7 +58,7 @@ async function transcribeAudio(buffer, filename = "voice.ogg") {
   try {
     console.log(`[transcribe] path=raw-ogg uploading ${buffer.length} bytes as ${filename}...`);
     const result = await callWhisper(buffer, filename, "audio/ogg");
-    console.log("[transcribe] path=raw-ogg succeeded");
+    console.log("[transcribe] path=raw-ogg succeeded, text:", JSON.stringify(result.text));
     return result.text;
   } catch (err) {
     const isFormatIssue =
@@ -58,7 +75,7 @@ async function transcribeAudio(buffer, filename = "voice.ogg") {
     const wavBuffer = await convertOggToWav(buffer);
     console.log(`[transcribe] path=ffmpeg-fallback-wav uploading ${wavBuffer.length} bytes as voice.wav...`);
     const result = await callWhisper(wavBuffer, "voice.wav", "audio/wav");
-    console.log("[transcribe] path=ffmpeg-fallback-wav succeeded");
+    console.log("[transcribe] path=ffmpeg-fallback-wav succeeded, text:", JSON.stringify(result.text));
     return result.text;
   }
 }

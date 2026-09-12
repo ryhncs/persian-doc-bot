@@ -38,7 +38,27 @@ async function convertOggToWav(inputBuffer) {
         .save(outputPath);
     });
 
-    return await fs.readFile(outputPath);
+    const wavBuffer = await fs.readFile(outputPath);
+
+    // Sanity check: 16kHz mono 16-bit PCM is exactly 32000 bytes/sec of
+    // audio data (44-byte WAV header excluded). Logging the implied
+    // duration alongside byte size makes a truncated/near-empty
+    // conversion (ffmpeg silently failing partway through, disk-full,
+    // etc.) visible in the logs without needing to pull the file itself.
+    const dataBytes = Math.max(0, wavBuffer.length - 44);
+    const impliedSeconds = dataBytes / (16000 * 2);
+    console.log(
+      `[audioConvert] wav output: ${wavBuffer.length} bytes ` +
+        `(~${impliedSeconds.toFixed(2)}s of 16kHz mono PCM16 audio)`
+    );
+    if (dataBytes <= 0) {
+      console.warn(
+        "[audioConvert] converted WAV has no audio data beyond the header " +
+          "— likely a silent/failed ffmpeg conversion"
+      );
+    }
+
+    return wavBuffer;
   } finally {
     await fs.rm(inputPath, { force: true });
     await fs.rm(outputPath, { force: true });
