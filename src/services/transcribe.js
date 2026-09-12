@@ -4,7 +4,10 @@ const { convertOggToWav } = require("./audioConvert");
 const { buildWhisperPrompt } = require("./whisperPrompt");
 
 async function callWhisper(buffer, filename, mimeType) {
-  const prompt = buildWhisperPrompt();
+  // Diagnostic toggle (WHISPER_PROMPT_ENABLED=false) — see config.js.
+  // Currently used to test whether the vocabulary prompt itself causes
+  // garbled output on short clips; remove this branch once resolved.
+  const prompt = config.WHISPER_PROMPT_ENABLED ? buildWhisperPrompt() : "";
   const model = config.WHISPER_MODEL;
   const language = "fa";
   const temperature = "0";
@@ -17,6 +20,7 @@ async function callWhisper(buffer, filename, mimeType) {
     model,
     language,
     temperature,
+    promptEnabled: config.WHISPER_PROMPT_ENABLED,
     promptByteLength: Buffer.byteLength(prompt, "utf8"),
     fileField: { filename, mimeType, bytes: buffer.length },
   });
@@ -25,7 +29,9 @@ async function callWhisper(buffer, filename, mimeType) {
   form.append("file", new Blob([buffer], { type: mimeType }), filename);
   form.append("model", model);
   form.append("response_format", "json");
-  form.append("prompt", prompt);
+  if (prompt) {
+    form.append("prompt", prompt);
+  }
   // Voice messages are Persian (with code-switched English) — pinning the
   // language skips Whisper's auto-detection, which otherwise regularly
   // misfires on short/mixed-language clips and visibly hurts accuracy even

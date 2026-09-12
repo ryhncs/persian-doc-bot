@@ -30,6 +30,13 @@ const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-large-v3";
 // working with good Persian output during local end-to-end testing.
 const SUMMARY_MODEL = process.env.SUMMARY_MODEL || "openai/gpt-oss-120b";
 
+// Diagnostic toggle: set WHISPER_PROMPT_ENABLED=false in the environment to
+// send no `prompt` field to Whisper at all (no redeploy needed, Render
+// redeploys on env var change). Used to test whether the vocabulary
+// prompt-biasing text is itself causing garbled transcriptions on short
+// clips. Defaults on.
+const WHISPER_PROMPT_ENABLED = process.env.WHISPER_PROMPT_ENABLED !== "false";
+
 const MAX_VOICE_DURATION_SECONDS =
   parseInt(process.env.MAX_VOICE_DURATION_SECONDS, 10) || 600; // 10 minutes
 
@@ -48,6 +55,7 @@ module.exports = {
   PORT,
   POLLING_TIMEOUT_SECONDS,
   WHISPER_MODEL,
+  WHISPER_PROMPT_ENABLED,
   SUMMARY_MODEL,
   MAX_VOICE_DURATION_SECONDS,
   DAILY_VOICE_LIMIT_PER_USER,
