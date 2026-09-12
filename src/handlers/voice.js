@@ -18,6 +18,10 @@ function tooLongMessage(maxSeconds) {
   return `این پیام صوتی خیلی طولانیه 🙏 فعلاً فقط پیام‌های زیر ${minutes} دقیقه رو پردازش می‌کنم.`;
 }
 
+function tooShortMessage(minSeconds) {
+  return `این پیام صوتی خیلی کوتاهه 🙏 برای تشخیص درست گفتار، لطفاً یه پیام صوتی حداقل ${minSeconds} ثانیه‌ای بفرست.`;
+}
+
 /**
  * Handles an incoming voice/audio message: download -> transcribe ->
  * summarize -> reply with the summary and "متن کامل" / "خروجی Word" buttons.
@@ -45,6 +49,17 @@ async function handleVoiceMessage(bot, msg) {
 
   if (media.duration > config.MAX_VOICE_DURATION_SECONDS) {
     await bot.sendMessage(chatId, tooLongMessage(config.MAX_VOICE_DURATION_SECONDS));
+    return;
+  }
+
+  if (media.duration < config.MIN_VOICE_DURATION_SECONDS) {
+    console.log("[voice] rejected: below minimum duration", {
+      chatId,
+      userId,
+      durationSeconds: media.duration,
+      minRequired: config.MIN_VOICE_DURATION_SECONDS,
+    });
+    await bot.sendMessage(chatId, tooShortMessage(config.MIN_VOICE_DURATION_SECONDS));
     return;
   }
 

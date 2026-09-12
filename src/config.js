@@ -30,15 +30,15 @@ const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-large-v3";
 // working with good Persian output during local end-to-end testing.
 const SUMMARY_MODEL = process.env.SUMMARY_MODEL || "openai/gpt-oss-120b";
 
-// Diagnostic toggle: set WHISPER_PROMPT_ENABLED=false in the environment to
-// send no `prompt` field to Whisper at all (no redeploy needed, Render
-// redeploys on env var change). Used to test whether the vocabulary
-// prompt-biasing text is itself causing garbled transcriptions on short
-// clips. Defaults on.
-const WHISPER_PROMPT_ENABLED = process.env.WHISPER_PROMPT_ENABLED !== "false";
-
 const MAX_VOICE_DURATION_SECONDS =
   parseInt(process.env.MAX_VOICE_DURATION_SECONDS, 10) || 600; // 10 minutes
+
+// Whisper is unreliable on very short clips regardless of prompt/language/
+// temperature tuning (confirmed via testing: ~2s clips produced garbled
+// output with no prompt sent at all). Below this, skip the Groq call
+// entirely and ask the user to send a longer message.
+const MIN_VOICE_DURATION_SECONDS =
+  parseInt(process.env.MIN_VOICE_DURATION_SECONDS, 10) || 4;
 
 const DAILY_VOICE_LIMIT_PER_USER =
   parseInt(process.env.DAILY_VOICE_LIMIT_PER_USER, 10) || 20;
@@ -55,9 +55,9 @@ module.exports = {
   PORT,
   POLLING_TIMEOUT_SECONDS,
   WHISPER_MODEL,
-  WHISPER_PROMPT_ENABLED,
   SUMMARY_MODEL,
   MAX_VOICE_DURATION_SECONDS,
+  MIN_VOICE_DURATION_SECONDS,
   DAILY_VOICE_LIMIT_PER_USER,
   GLOBAL_WHISPER_PER_MINUTE,
   GLOBAL_LLM_PER_MINUTE,
