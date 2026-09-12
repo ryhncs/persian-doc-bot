@@ -1,12 +1,14 @@
 const config = require("../config");
 const { groqFetch, GroqApiError } = require("./groqClient");
 const { convertOggToMp3 } = require("./audioConvert");
+const { buildWhisperPrompt } = require("./whisperPrompt");
 
 async function callWhisper(buffer, filename, mimeType) {
   const form = new FormData();
   form.append("file", new Blob([buffer], { type: mimeType }), filename);
   form.append("model", config.WHISPER_MODEL);
   form.append("response_format", "json");
+  form.append("prompt", buildWhisperPrompt());
 
   return groqFetch("/audio/transcriptions", {
     method: "POST",

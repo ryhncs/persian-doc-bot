@@ -34,7 +34,7 @@ Both features share the same `docx` generation pipeline
 | `GROQ_API_KEY`                 | for VoiceSum | —                       | Text-formatting flow still works without it; voice replies with a friendly Persian error if unset. |
 | `WEBHOOK_URL`                  | no       | unset (polling mode)       | Public HTTPS base URL. Set this on Runflare/Liara to switch to webhook mode. Leave unset for polling (default, works everywhere, including the existing Railway deploy). |
 | `PORT`                         | no       | `3000`                     | Only used in webhook mode.                                             |
-| `WHISPER_MODEL`                | no       | `whisper-large-v3-turbo`   | Or `whisper-large-v3` for higher accuracy / slower.                    |
+| `WHISPER_MODEL`                | no       | `whisper-large-v3`         | Or `whisper-large-v3-turbo` for lower accuracy / faster.               |
 | `SUMMARY_MODEL`                | no       | `openai/gpt-oss-120b`      | Verified working with good Persian output; see [Swapping the summarization model](#swapping-the-summarization-model). |
 | `MAX_VOICE_DURATION_SECONDS`   | no       | `600` (10 min)             | Voice messages longer than this are rejected with a Persian message.   |
 | `DAILY_VOICE_LIMIT_PER_USER`   | no       | `20`                       | Per-user daily cap on voice messages processed (in-memory, resets at UTC midnight). |

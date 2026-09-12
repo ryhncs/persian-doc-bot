@@ -22,7 +22,9 @@ const POLLING_TIMEOUT_SECONDS = process.env.POLLING_TIMEOUT_SECONDS
   ? parseInt(process.env.POLLING_TIMEOUT_SECONDS, 10)
   : undefined;
 
-const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-large-v3-turbo";
+// Full model, not turbo: turbo trades accuracy for speed, and we're
+// nowhere near Groq's free-tier rate limits, so the accuracy is worth it.
+const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-large-v3";
 // llama-3.3-70b-versatile (the originally planned model) has been removed
 // from Groq's catalog as of this writing; openai/gpt-oss-120b verified
 // working with good Persian output during local end-to-end testing.
