@@ -46,15 +46,62 @@ const SENTENCES = {
     "هم از Groq استفاده کردم.",
 };
 
+// Groq hard-rejects the Whisper `prompt` param over 896 bytes (its error
+// message says "characters" but the limit is actually measured in UTF-8
+// bytes — Persian text is multi-byte, so JS string .length under-counts
+// it: a 738-char prompt here was reported by Groq as 1056 "characters",
+// which is exactly its UTF-8 byte length). Stay well under that.
+const MAX_PROMPT_BYTES = 850;
+
+// Categories are included whole, greedily, in this priority order — most
+// likely to appear in this bot's actual usage first — until the next one
+// wouldn't fit. Reorder or add to this list; buildWhisperPrompt() re-fits
+// automatically. Whisper only honors roughly the last ~224 tokens of a
+// prompt anyway, so a shorter, higher-signal prompt loses little.
+const CATEGORY_PRIORITY = ["techDev", "platforms", "loanwords"];
+
 /**
- * Builds the natural-language prompt string sent to Whisper's `prompt`
- * param. Note Whisper only honors roughly the last ~224 tokens of a prompt,
- * so keep SENTENCES compact rather than appending indefinitely — split off
- * a separate prompt-selection strategy (e.g. rotate categories) if this
- * grows much further.
+ * Hard-truncates a string to at most maxBytes when UTF-8 encoded, without
+ * splitting a multi-byte character. Safety net only — normal operation
+ * should never reach this, since buildWhisperPrompt() fits whole category
+ * sentences under the budget first.
  */
-function buildWhisperPrompt() {
-  return Object.values(SENTENCES).join(" ");
+function truncateToByteLength(str, maxBytes) {
+  if (Buffer.byteLength(str, "utf8") <= maxBytes) return str;
+  return Buffer.from(str, "utf8")
+    .subarray(0, maxBytes)
+    .toString("utf8")
+    // toString() renders any dangling partial multi-byte sequence at the
+    // cut point as U+FFFD — strip it so the prompt doesn't end mid-glyph.
+    .replace(/�+$/, "");
 }
 
-module.exports = { VOCABULARY, SENTENCES, buildWhisperPrompt };
+/**
+ * Builds the natural-language prompt string sent to Whisper's `prompt`
+ * param: whole category sentences, in priority order, greedily included
+ * while they still fit under MAX_PROMPT_BYTES — lower-priority categories
+ * (loanwords) are dropped first if the vocabulary grows too large to fit.
+ * A final byte-truncation is applied as a safety net so this can never
+ * silently exceed Groq's limit again, even if a single category sentence
+ * later grows past the whole budget on its own.
+ */
+function buildWhisperPrompt() {
+  let result = "";
+  for (const category of CATEGORY_PRIORITY) {
+    const sentence = SENTENCES[category];
+    if (!sentence) continue;
+    const candidate = result ? `${result} ${sentence}` : sentence;
+    if (Buffer.byteLength(candidate, "utf8") <= MAX_PROMPT_BYTES) {
+      result = candidate;
+    }
+  }
+  return truncateToByteLength(result, MAX_PROMPT_BYTES);
+}
+
+module.exports = {
+  VOCABULARY,
+  SENTENCES,
+  CATEGORY_PRIORITY,
+  MAX_PROMPT_BYTES,
+  buildWhisperPrompt,
+};
