@@ -1,0 +1,15 @@
+services:
+  # Web Service (Render's free plan doesn't support Background Workers).
+  # Runs in webhook mode automatically: RENDER_EXTERNAL_URL is auto-injected
+  # by Render and picked up as WEBHOOK_URL by src/config.js, and Render also
+  # auto-injects PORT — no manual URL configuration needed.
+  - type: web
+    name: voicesum-staging
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
