@@ -1,6 +1,6 @@
 # VoiceSum Bot
 
-A Telegram bot, gradually turning into a student assistant. Four features
+A Telegram bot, gradually turning into a student assistant. Five features
 so far:
 
 1. **Persian doc formatting** (original) — send any messy pasted text, get
@@ -12,10 +12,17 @@ so far:
    get it back at a fraction of the size. Images are re-encoded with
    `sharp`; PDFs are compressed with Ghostscript (downsamples embedded
    images, subsets fonts, leaves text/vector content untouched).
-4. **PDF summarization** (new, student assistant) — send a PDF and choose
-   "خلاصه‌سازی" instead: the bot extracts its text and returns a
-   structured Persian summary (key points as bullet lines), with the same
-   "متن کامل" / "خروجی Word" buttons as the VoiceSum flow.
+4. **PDF summarization** — send a PDF and choose "خلاصه‌سازی" instead:
+   the bot extracts its text and returns a structured Persian summary (key
+   points as bullet lines), with the same "متن کامل" / "خروجی Word"
+   buttons as the VoiceSum flow.
+5. **Translate & simplify** (new, student assistant) — every text message
+   converted to a `.docx` (feature 1) also gets two buttons: "🌐 ترجمه و
+   ساده‌سازی (فارسی)" translates non-Persian text to fluent Persian, then
+   rewrites it (translated or already-Persian) in simpler language; "🔁
+   ترجمه به انگلیسی" translates the text (typically Persian) into plain
+   English with no simplification step. Both reuse the same "متن اصلی" /
+   "خروجی Word" buttons as the other summary-style flows.
 
 The doc-formatting and VoiceSum features share the same `docx` generation
 pipeline (`rightToLeft: true`, Vazirmatn for Persian / Poppins for Latin
@@ -80,12 +87,13 @@ src/
   docGenerator.js          Text → RTL Persian .docx (shared by both features)
   handlers/
     voice.js               Voice/audio message → transcript → summary → reply
-    callbacks.js            "متن کامل" / "خروجی Word" button handling
+    callbacks.js            "متن کامل" / "خروجی Word" (+ PDF-choice, + translate) button handling
     compress.js              Photo/document message → compressed file → reply
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
-    summarize.js               Persian summarization prompt (swap LLM provider here)
+    summarize.js               Persian summarization prompts (voice + document; swap LLM provider here)
+    translateSimplify.js        Translate-to-Persian+simplify AND Persian-to-English prompts (same Groq model)
     audioConvert.js             OGG → 16kHz mono WAV via ffmpeg-static
     telegramFile.js               Downloads a Telegram file by file_id
     sessionStore.js                 In-memory transcript/summary store for button callbacks
@@ -175,6 +183,31 @@ as a Blueprint so this needs no manual URL configuration:
    no second deploy needed.
 4. Free-tier web services spin down after 15 minutes of no inbound HTTP
    traffic and take ~1 minute to wake back up on the next Telegram update.
+
+## Translate & simplify
+
+Every text message that gets converted to a `.docx` (feature 1) also gets a
+follow-up message with two buttons, both hitting the same Groq model used
+for summarization but with different prompts:
+
+- **"🌐 ترجمه و ساده‌سازی (فارسی)"** — if the text isn't Persian, translates
+  it first, then (translated or original) rewrites it in simpler
+  language — shorter sentences, easier vocabulary, technical
+  terms/numbers/names kept exact.
+- **"🔁 ترجمه به انگلیسی"** — translates the text (typically Persian) into
+  plain, fluent English with no simplification step — for writing an
+  English abstract/email from Persian notes, for example.
+
+Both results get the same "متن اصلی" / "خروجی Word" buttons as the
+VoiceSum and PDF-summary flows (via the same session-store mechanism — see
+`src/services/translateSimplify.js`'s `translateAndSimplify` /
+`translateToEnglish`, and the `txt:translate` / `txt:toEnglish` handling in
+`src/handlers/callbacks.js`).
+
+No separate character-length guard is needed here: Telegram caps a single
+text message at 4096 characters, which stays comfortably under this Groq
+account's 8000 TPM budget even accounting for the prompt and a
+translation+simplification-length reply.
 
 ## PDF: summarize or compress?
 
