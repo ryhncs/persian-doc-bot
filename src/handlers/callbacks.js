@@ -5,6 +5,7 @@ const { extractPdfText } = require("../services/pdfText");
 const { summarizeDocumentText } = require("../services/summarize");
 const { downloadTelegramFile } = require("../services/telegramFile");
 const { compressAndSendPdf } = require("./compress");
+const { translateAndSimplify, translateToEnglish } = require("../services/translateSimplify");
 const config = require("../config");
 const { GroqRateLimitError } = require("../services/groqClient");
 const { checkGlobalMinuteRate } = require("../services/rateLimiter");
@@ -20,6 +21,9 @@ const TOO_LONG_FOR_SUMMARY =
 const RATE_LIMIT_MESSAGE = "الان درخواست‌ها زیاده، چند لحظه دیگه دوباره امتحان کن 🙏";
 const NO_GROQ_KEY_MESSAGE = "قابلیت خلاصه‌سازی فعلاً روی این بات فعال نیست.";
 const SUMMARY_ERROR = "خلاصه‌سازی این پی‌دی‌اف با مشکل مواجه شد. دوباره امتحان کن.";
+const PROCESSING_TRANSLATE_SIMPLIFY = "⏳ در حال ترجمه و ساده‌سازی...";
+const PROCESSING_TO_ENGLISH = "⏳ در حال ترجمه به انگلیسی...";
+const TRANSLATE_ERROR = "ترجمه/ساده‌سازی این متن با مشکل مواجه شد. دوباره امتحان کن.";
 
 function checkOwnedSession(session, callbackQuery) {
   if (!session) return "expired";
@@ -189,6 +193,80 @@ async function handleDocumentChoiceCallback(bot, callbackQuery, action, sessionI
   }
 }
 
+/**
+ * Handles both translation buttons shown under every text->docx reply (see
+ * bot.js's text message handler): "🌐 ترجمه و ساده‌سازی (فارسی)"
+ * (action "translate", any language -> Persian translation + simplified
+ * version) and "🔁 ترجمه به انگلیسی" (action "toEnglish", typically
+ * Persian -> plain English translation, no simplification). The session
+ * here only holds the original text (no result yet); on success this
+ * creates a *new* "vs:"-shaped session {transcript, summary} so the result
+ * gets the same "متن اصلی"/"خروجی Word" buttons as the voice/PDF-summary
+ * flows, reusing handleSummarySessionCallback rather than duplicating that
+ * logic.
+ */
+async function handleTranslateCallback(bot, callbackQuery, action, sessionId) {
+  if (action !== "translate" && action !== "toEnglish") return;
+
+  const chatId = callbackQuery.message.chat.id;
+  const session = getSession(sessionId);
+
+  const problem = checkOwnedSession(session, callbackQuery);
+  if (problem) {
+    await answerWithProblem(bot, callbackQuery, problem);
+    return;
+  }
+
+  if (!config.GROQ_API_KEY) {
+    await bot.answerCallbackQuery(callbackQuery.id);
+    await bot.sendMessage(chatId, NO_GROQ_KEY_MESSAGE);
+    return;
+  }
+
+  if (!checkGlobalMinuteRate("llm", config.GLOBAL_LLM_PER_MINUTE)) {
+    await bot.answerCallbackQuery(callbackQuery.id);
+    await bot.sendMessage(chatId, RATE_LIMIT_MESSAGE);
+    return;
+  }
+
+  await bot.answerCallbackQuery(callbackQuery.id);
+  await bot.sendMessage(chatId, action === "toEnglish" ? PROCESSING_TO_ENGLISH : PROCESSING_TRANSLATE_SIMPLIFY);
+
+  try {
+    const result =
+      action === "toEnglish"
+        ? await translateToEnglish(session.transcript)
+        : await translateAndSimplify(session.transcript);
+
+    const newSessionId = createSession({
+      userId: session.userId,
+      chatId,
+      transcript: session.transcript,
+      summary: result,
+    });
+
+    await bot.sendMessage(chatId, result, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "متن اصلی", callback_data: `vs:full:${newSessionId}` },
+            { text: "خروجی Word", callback_data: `vs:docx:${newSessionId}` },
+          ],
+        ],
+      },
+    });
+  } catch (err) {
+    console.error("Translate/simplify failed:", {
+      chatId,
+      action,
+      error: err && err.message,
+      stack: err && err.stack,
+    });
+    const message = err instanceof GroqRateLimitError ? RATE_LIMIT_MESSAGE : TRANSLATE_ERROR;
+    await bot.sendMessage(chatId, message);
+  }
+}
+
 async function handleCallbackQuery(bot, callbackQuery) {
   const data = callbackQuery.data || "";
 
@@ -201,6 +279,12 @@ async function handleCallbackQuery(bot, callbackQuery) {
   if (data.startsWith("doc:")) {
     const [, action, sessionId] = data.split(":");
     await handleDocumentChoiceCallback(bot, callbackQuery, action, sessionId);
+    return;
+  }
+
+  if (data.startsWith("txt:")) {
+    const [, action, sessionId] = data.split(":");
+    await handleTranslateCallback(bot, callbackQuery, action, sessionId);
     return;
   }
 }

@@ -3,6 +3,7 @@ const { textToDocxBuffer } = require("./docGenerator");
 const { handleVoiceMessage } = require("./handlers/voice");
 const { handleCallbackQuery } = require("./handlers/callbacks");
 const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
+const { createSession } = require("./services/sessionStore");
 const config = require("./config");
 
 const TOKEN = config.TELEGRAM_BOT_TOKEN;
@@ -54,6 +55,8 @@ const WELCOME = [
   "",
   "یه عکس بفرستی حجمش رو برات کم می‌کنم؛ یه فایل پی‌دی‌اف بفرستی می‌پرسم می‌خوای خلاصه‌ش کنم یا حجمش رو کم کنم.",
   "",
+  "زیر هر متنی که برات Word می‌سازم دو تا دکمه‌ی ترجمه هم هست: یکی برای ترجمه و ساده‌سازی به فارسی، یکی برای ترجمه به انگلیسی.",
+  "",
   "کافیه متن، صدا، عکس یا پی‌دی‌اف رو بفرستی — چیز دیگه‌ای لازم نیست.",
 ].join("\n");
 
@@ -66,6 +69,7 @@ bot.on("message", async (msg) => {
   if (!msg.text || msg.text.startsWith("/")) return;
 
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
   const rawText = msg.text;
 
   try {
@@ -83,6 +87,22 @@ bot.on("message", async (msg) => {
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       }
     );
+
+    // Student-assistant feature: offer to translate/simplify the same text.
+    // Only the raw text is kept in the session (no result yet) — see
+    // handlers/callbacks.js's "txt:translate" handling, which does the
+    // actual Groq call once the button is pressed, not before.
+    const sessionId = createSession({ userId, chatId, transcript: rawText });
+    await bot.sendMessage(chatId, "می‌خوای این متن رو ترجمه هم بکنم؟", {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🌐 ترجمه و ساده‌سازی (فارسی)", callback_data: `txt:translate:${sessionId}` },
+            { text: "🔁 ترجمه به انگلیسی", callback_data: `txt:toEnglish:${sessionId}` },
+          ],
+        ],
+      },
+    });
   } catch (err) {
     console.error("Failed to generate/send document:", err);
     bot.sendMessage(chatId, "یه مشکلی پیش اومد، دوباره امتحان کن.");
