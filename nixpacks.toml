@@ -1,0 +1,5 @@
+# Railway builds this repo with Nixpacks (see railway.json). PDF compression
+# shells out to Ghostscript's `gs` binary, which isn't installed by default —
+# this pulls it in as an apt package during the build.
+[phases.setup]
+aptPkgs = ["ghostscript"]

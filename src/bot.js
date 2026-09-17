@@ -2,6 +2,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const { textToDocxBuffer } = require("./docGenerator");
 const { handleVoiceMessage } = require("./handlers/voice");
 const { handleCallbackQuery } = require("./handlers/callbacks");
+const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
 const config = require("./config");
 
 const TOKEN = config.TELEGRAM_BOT_TOKEN;
@@ -51,7 +52,9 @@ const WELCOME = [
   "",
   "یا یه پیام صوتی برام بفرست (یا فوروارد کن) تا متنش رو پیاده و خلاصه کنم.",
   "",
-  "کافیه متن یا صدا رو بفرستی — چیز دیگه‌ای لازم نیست.",
+  "یه عکس یا فایل پی‌دی‌اف هم بفرستی، حجمش رو برات کم می‌کنم.",
+  "",
+  "کافیه متن، صدا، عکس یا پی‌دی‌اف رو بفرستی — چیز دیگه‌ای لازم نیست.",
 ].join("\n");
 
 bot.onText(/\/start/, (msg) => {
@@ -96,6 +99,19 @@ bot.on("voice", (msg) => {
 bot.on("audio", (msg) => {
   handleVoiceMessage(bot, msg).catch((err) => {
     console.error("Unhandled error in voice handler:", err);
+  });
+});
+
+// New: image/PDF compression flow.
+bot.on("photo", (msg) => {
+  handlePhotoMessage(bot, msg).catch((err) => {
+    console.error("Unhandled error in photo handler:", err);
+  });
+});
+
+bot.on("document", (msg) => {
+  handleDocumentMessage(bot, msg).catch((err) => {
+    console.error("Unhandled error in document handler:", err);
   });
 });
 
