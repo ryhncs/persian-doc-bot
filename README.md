@@ -25,7 +25,7 @@ text).
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) on Telegram → get a token.
 2. Get a Groq API key at [console.groq.com](https://console.groq.com) (needed for VoiceSum only — text formatting works without it).
-3. Make sure Ghostscript (`gs`) is on `PATH` — needed for PDF compression only; image compression and everything else works without it. The Dockerfile and `nixpacks.toml` in this repo already install it for Render/Runflare/Liara and Railway respectively; for local dev, install it with your OS package manager (e.g. `apt install ghostscript`, `brew install ghostscript`).
+3. Make sure Ghostscript (`gs`) is on `PATH` — needed for PDF compression only; image compression and everything else works without it. The Dockerfile in this repo already installs it for Render (and Runflare/Liara, if you deploy there); for local dev, install it with your OS package manager (e.g. `apt install ghostscript`, `brew install ghostscript`).
 4. Copy `.env.example` to `.env` and fill in the values (see [Environment variables](#environment-variables)).
 5. Install dependencies:
    ```bash
@@ -43,7 +43,7 @@ text).
 | ------------------------------ | -------- | -------------------------- | ---------------------------------------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`           | yes      | —                           | Falls back to the legacy `BOT_TOKEN` name if that's already set.       |
 | `GROQ_API_KEY`                 | for VoiceSum | —                       | Text-formatting flow still works without it; voice replies with a friendly Persian error if unset. |
-| `WEBHOOK_URL`                  | no       | unset (polling mode)       | Public HTTPS base URL. Set this on Runflare/Liara to switch to webhook mode. Leave unset for polling (default, works everywhere, including the existing Railway deploy). |
+| `WEBHOOK_URL`                  | no       | unset (polling mode)       | Public HTTPS base URL. Set this on Runflare/Liara to switch to webhook mode; on Render this is set automatically via `RENDER_EXTERNAL_URL` (see Deployment). Leave unset for polling (default, used for local dev). |
 | `PORT`                         | no       | `3000`                     | Only used in webhook mode.                                             |
 | `WHISPER_MODEL`                | no       | `whisper-large-v3`         | Or `whisper-large-v3-turbo` for lower accuracy / faster.               |
 | `SUMMARY_MODEL`                | no       | `openai/gpt-oss-120b`      | Verified working with good Persian output; see [Swapping the summarization model](#swapping-the-summarization-model). |
@@ -136,12 +136,7 @@ Leave `WEBHOOK_URL` unset for local dev — the bot uses polling.
 
 ## Deployment
 
-### Railway (existing deploy — polling, no changes needed)
-
-`railway.json` is already set up (`npm start`, Nixpacks build). Just make
-sure `TELEGRAM_BOT_TOKEN` (or the legacy `BOT_TOKEN`) and `GROQ_API_KEY` are
-set in the Railway project's environment variables. Leave `WEBHOOK_URL`
-unset — Railway is a persistent process, so polling works fine as-is.
+Render is the deploy target (both staging and production). See below.
 
 ### Runflare / Liara (Docker, webhook mode)
 
@@ -163,10 +158,9 @@ The included `Dockerfile` builds the bot and runs it with an explicit
 
 ### Render (Docker, webhook mode, free tier)
 
-A separate, isolated deploy — not the production Railway service. Render's
-free plan only supports **Web Services** (Background Workers require a paid
-plan), so this runs in webhook mode. `render.yaml` is set up as a Blueprint
-so this needs no manual URL configuration:
+Render's free plan only supports **Web Services** (Background Workers
+require a paid plan), so this runs in webhook mode. `render.yaml` is set up
+as a Blueprint so this needs no manual URL configuration:
 
 1. In the Render dashboard: **New > Blueprint**, connect this GitHub repo,
    and pick the `claude/voicesum-telegram-bot-138b43` branch (or whichever
