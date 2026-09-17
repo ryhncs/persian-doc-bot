@@ -43,6 +43,12 @@ const MIN_VOICE_DURATION_SECONDS =
 const DAILY_VOICE_LIMIT_PER_USER =
   parseInt(process.env.DAILY_VOICE_LIMIT_PER_USER, 10) || 20;
 
+// Ghostscript's built-in quality presets, roughly smallest-to-largest:
+// /screen, /ebook, /printer, /prepress. /ebook is a good default — close to
+// screen quality at a fraction of the size, fine for documents shared over
+// chat.
+const PDF_COMPRESS_PRESET = process.env.PDF_COMPRESS_PRESET || "/ebook";
+
 // Kept a little under Groq's published free-tier caps (20/min Whisper,
 // 30/min Llama) so we back off before Groq starts returning 429s.
 const GLOBAL_WHISPER_PER_MINUTE = 18;
@@ -59,6 +65,7 @@ module.exports = {
   MAX_VOICE_DURATION_SECONDS,
   MIN_VOICE_DURATION_SECONDS,
   DAILY_VOICE_LIMIT_PER_USER,
+  PDF_COMPRESS_PRESET,
   GLOBAL_WHISPER_PER_MINUTE,
   GLOBAL_LLM_PER_MINUTE,
 };

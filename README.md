@@ -1,30 +1,36 @@
 # VoiceSum Bot
 
-A Telegram bot with two features:
+A Telegram bot with three features:
 
 1. **Persian doc formatting** (original) — send any messy pasted text, get
    back a clean, RTL, properly fonted `.docx` file.
-2. **VoiceSum** (new) — send or forward a voice message, get back a Persian
+2. **VoiceSum** — send or forward a voice message, get back a Persian
    summary in chat, with buttons to see the full transcript or export the
    summary/transcript as a `.docx`.
+3. **File compression** (new) — send a photo or a PDF, get it back at a
+   fraction of the size. Images are re-encoded with `sharp`; PDFs are
+   compressed with Ghostscript (downsamples embedded images, subsets fonts,
+   leaves text/vector content untouched).
 
-Both features share the same `docx` generation pipeline
-(`rightToLeft: true`, Vazirmatn for Persian / Poppins for Latin text).
+The doc-formatting and VoiceSum features share the same `docx` generation
+pipeline (`rightToLeft: true`, Vazirmatn for Persian / Poppins for Latin
+text).
 
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) on Telegram → get a token.
 2. Get a Groq API key at [console.groq.com](https://console.groq.com) (needed for VoiceSum only — text formatting works without it).
-3. Copy `.env.example` to `.env` and fill in the values (see [Environment variables](#environment-variables)).
-4. Install dependencies:
+3. Make sure Ghostscript (`gs`) is on `PATH` — needed for PDF compression only; image compression and everything else works without it. The Dockerfile and `nixpacks.toml` in this repo already install it for Render/Runflare/Liara and Railway respectively; for local dev, install it with your OS package manager (e.g. `apt install ghostscript`, `brew install ghostscript`).
+4. Copy `.env.example` to `.env` and fill in the values (see [Environment variables](#environment-variables)).
+5. Install dependencies:
    ```bash
    npm install
    ```
-5. Run it:
+6. Run it:
    ```bash
    npm start
    ```
-6. Open your bot in Telegram, send `/start`, then send text (→ docx) or a voice message (→ summary).
+7. Open your bot in Telegram, send `/start`, then send text (→ docx), a voice message (→ summary), or a photo/PDF (→ compressed file).
 
 ## Environment variables
 
@@ -39,6 +45,7 @@ Both features share the same `docx` generation pipeline
 | `MAX_VOICE_DURATION_SECONDS`   | no       | `600` (10 min)             | Voice messages longer than this are rejected with a Persian message.   |
 | `MIN_VOICE_DURATION_SECONDS`   | no       | `4`                        | Voice messages shorter than this are rejected with a Persian message — Whisper is unreliable on very short clips regardless of prompt/language/temperature tuning. |
 | `DAILY_VOICE_LIMIT_PER_USER`   | no       | `20`                       | Per-user daily cap on voice messages processed (in-memory, resets at UTC midnight). |
+| `PDF_COMPRESS_PRESET`          | no       | `/ebook`                  | Ghostscript `PDFSETTINGS` preset for PDF compression. Other options: `/screen` (smallest, lowest quality), `/printer`, `/prepress` (largest, closest to original). |
 
 ## Core VoiceSum flow
 
@@ -68,6 +75,7 @@ src/
   handlers/
     voice.js               Voice/audio message → transcript → summary → reply
     callbacks.js            "متن کامل" / "خروجی Word" button handling
+    compress.js              Photo/document message → compressed file → reply
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -76,6 +84,8 @@ src/
     telegramFile.js               Downloads a Telegram file by file_id
     sessionStore.js                 In-memory transcript/summary store for button callbacks
     rateLimiter.js                   Per-user daily + global per-minute limits
+    imageCompress.js                 Image → smaller JPEG via sharp
+    pdfCompress.js                    PDF → smaller PDF via Ghostscript (`gs` binary)
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
 ```
@@ -164,6 +174,26 @@ so this needs no manual URL configuration:
    no second deploy needed.
 4. Free-tier web services spin down after 15 minutes of no inbound HTTP
    traffic and take ~1 minute to wake back up on the next Telegram update.
+
+## File compression
+
+- **Images**: any photo sent to the bot is downloaded at Telegram's largest
+  available size, re-encoded as JPEG (`quality: 70`, capped at 1920px wide)
+  with `sharp`, and sent back as a document — as a document rather than a
+  photo, so Telegram doesn't re-compress it a second time. Typically cuts a
+  phone photo to 20-40% of its original size with no visible quality loss.
+- **PDFs**: sent as a Telegram "document" with `mime_type: application/pdf`.
+  Compressed via Ghostscript's `/ebook` preset (downsamples embedded images,
+  subsets fonts). Text and vectors are untouched, so a text-only PDF won't
+  shrink much — the size win is mostly on PDFs with embedded images/scans.
+  Requires the `gs` binary on the host (see [Setup](#setup)); if it's
+  missing, the bot replies with a clear Persian error instead of crashing.
+- Both replies include a caption with the before/after size and percentage
+  saved.
+- Non-PDF documents (e.g. a `.docx` or `.zip` sent as a file) get a
+  friendly "not supported yet" reply rather than being silently ignored.
+- 20MB cap on incoming files — a Telegram Bot API limit on file downloads,
+  not something this bot can raise.
 
 ## Notes / known limitations
 
