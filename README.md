@@ -1,16 +1,21 @@
 # VoiceSum Bot
 
-A Telegram bot with three features:
+A Telegram bot, gradually turning into a student assistant. Four features
+so far:
 
 1. **Persian doc formatting** (original) — send any messy pasted text, get
    back a clean, RTL, properly fonted `.docx` file.
 2. **VoiceSum** — send or forward a voice message, get back a Persian
    summary in chat, with buttons to see the full transcript or export the
    summary/transcript as a `.docx`.
-3. **File compression** (new) — send a photo or a PDF, get it back at a
-   fraction of the size. Images are re-encoded with `sharp`; PDFs are
-   compressed with Ghostscript (downsamples embedded images, subsets fonts,
-   leaves text/vector content untouched).
+3. **File compression** — send a photo or a PDF and choose "کم کردن حجم",
+   get it back at a fraction of the size. Images are re-encoded with
+   `sharp`; PDFs are compressed with Ghostscript (downsamples embedded
+   images, subsets fonts, leaves text/vector content untouched).
+4. **PDF summarization** (new, student assistant) — send a PDF and choose
+   "خلاصه‌سازی" instead: the bot extracts its text and returns a
+   structured Persian summary (key points as bullet lines), with the same
+   "متن کامل" / "خروجی Word" buttons as the VoiceSum flow.
 
 The doc-formatting and VoiceSum features share the same `docx` generation
 pipeline (`rightToLeft: true`, Vazirmatn for Persian / Poppins for Latin
@@ -46,6 +51,7 @@ text).
 | `MIN_VOICE_DURATION_SECONDS`   | no       | `4`                        | Voice messages shorter than this are rejected with a Persian message — Whisper is unreliable on very short clips regardless of prompt/language/temperature tuning. |
 | `DAILY_VOICE_LIMIT_PER_USER`   | no       | `20`                       | Per-user daily cap on voice messages processed (in-memory, resets at UTC midnight). |
 | `PDF_COMPRESS_PRESET`          | no       | `/ebook`                  | Ghostscript `PDFSETTINGS` preset for PDF compression. Other options: `/screen` (smallest, lowest quality), `/printer`, `/prepress` (largest, closest to original). |
+| `MAX_DOCUMENT_CHARS_FOR_SUMMARY` | no     | `8000`                    | Character-count cap on extracted PDF text before summarization is attempted — sized to stay under Groq's measured per-minute token cap for `SUMMARY_MODEL` on this account (see `config.js`). Longer documents get a friendly "too long, send a shorter excerpt" reply instead of a failed summary. |
 
 ## Core VoiceSum flow
 
@@ -86,6 +92,7 @@ src/
     rateLimiter.js                   Per-user daily + global per-minute limits
     imageCompress.js                 Image → smaller JPEG via sharp
     pdfCompress.js                    PDF → smaller PDF via Ghostscript (`gs` binary)
+    pdfText.js                        PDF → extracted plain text via pdf-parse (no native binary)
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
 ```
@@ -174,6 +181,25 @@ so this needs no manual URL configuration:
    no second deploy needed.
 4. Free-tier web services spin down after 15 minutes of no inbound HTTP
    traffic and take ~1 minute to wake back up on the next Telegram update.
+
+## PDF: summarize or compress?
+
+Since a PDF can go through either the compression or the summarization
+flow, sending one doesn't act immediately — the bot asks first via two
+inline buttons ("📝 خلاصه‌سازی" / "🗜 کم کردن حجم"). The choice, plus the
+file's Telegram `file_id`, is kept in the same short-lived in-memory
+session store the VoiceSum buttons use; the PDF itself is only
+re-downloaded once the user picks an action, so nothing large sits in
+memory while they're deciding.
+
+Summarization extracts text with `pdf-parse` (pure JS, separate from the
+Ghostscript-based compression path) and summarizes it with the same Groq
+model as VoiceSum, but a different system prompt tuned for written
+documents (lecture notes, slides, papers) rather than spoken transcripts —
+see `src/services/summarize.js`. A PDF with no real text layer (a scan with
+no OCR) gets a clear "can't extract text from this" reply rather than a
+garbled or empty summary — full OCR (photographed handwriting/slides) is a
+possible future addition, not implemented yet.
 
 ## File compression
 
