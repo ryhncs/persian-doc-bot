@@ -35,6 +35,14 @@ function deriveBudget({ tpm, charsPerToken, promptChars, maxOut }) {
       min,
       Math.floor((Math.floor(tpm * 0.9 * 0.8) - tokens(promptChars.combine) - maxOut.final) * charsPerToken)
     ),
+    // Last-resort ceiling for a merge request: everything the limiter would
+    // let through in one minute. Only used when nothing smaller can fit two
+    // partial summaries (the estimate is conservative, so real requests are
+    // smaller than this).
+    absoluteBatchChars: Math.max(
+      min,
+      Math.floor((Math.floor(tpm * 0.9) - tokens(promptChars.combine) - maxOut.final) * charsPerToken)
+    ),
     // One-request path: only when it fits comfortably in a single window.
     singleShotChars: Math.max(
       min,
@@ -135,25 +143,41 @@ async function summarizeDocument(text, deps) {
   }
 
   // Each level must merge at least two partials per batch or it can't shrink.
-  // The usual batch size is sized for pacing, not correctness: real Persian
-  // partial summaries can be longer than half of it. So the limit is lifted
-  // just enough to fit two of the largest items, never past the hard ceiling;
-  // and if even that can't fit two, every item is condensed on its own first.
+  // Escalation, in order, until two partials fit in one merge request:
+  //   1. the usual batch size, lifted just enough to fit two of the largest
+  //      partials (up to the hard ceiling, 80% of the per-minute cap);
+  //   2. the absolute ceiling (100% of the per-minute cap, estimated
+  //      conservatively);
+  //   3. condense every partial on its own with the TIGHT prompt, which has a
+  //      much smaller output cap, so the result is guaranteed to be small enough
+  //      to pair. (A plain merge of a single partial would come back about the
+  //      same size, which is why this needs its own prompt and cap.)
+  // Only if that still can't fit two does it give up, with the sizes in the error.
   const hardChars = budget.hardBatchChars || budget.batchChars;
-  const batchLimitFor = (items) => {
+  const absoluteChars = Math.max(hardChars, budget.absoluteBatchChars || hardChars);
+  const limitFor = (items, ceiling) => {
     const largestPair = 2 * Math.max(...items.map((p) => p.length)) + BATCH_SEPARATOR.length;
-    return Math.min(hardChars, Math.max(budget.batchChars, largestPair));
+    return Math.min(ceiling, Math.max(budget.batchChars, largestPair));
   };
+  const shrinks = (items, batches) => batches.length === 1 || batches.length < items.length;
   const sizes = (items) => items.map((p) => p.length).join(",");
+
+  function pack(items) {
+    for (const ceiling of [hardChars, absoluteChars]) {
+      const limit = limitFor(items, ceiling);
+      const batches = packBatches(items, limit);
+      if (shrinks(items, batches)) return { batches, limit };
+    }
+    return { batches: null, limit: limitFor(items, absoluteChars) };
+  }
 
   let level = partials;
   for (let depth = 0; depth < MAX_REDUCE_LEVELS; depth++) {
-    let limit = batchLimitFor(level);
-    let batches = packBatches(level, limit);
+    let { batches, limit } = pack(level);
 
-    if (batches.length > 1 && batches.length >= level.length) {
+    if (!batches) {
       log.warn(
-        `[longSummarize] level ${depth}: no two partials fit in ${limit} chars (sizes ${sizes(level)}); condensing each on its own first`
+        `[longSummarize] level ${depth}: no two partials fit in ${limit} chars (sizes ${sizes(level)}); condensing each one tightly first`
       );
       const condensed = [];
       for (let i = 0; i < level.length; i++) {
@@ -163,27 +187,26 @@ async function summarizeDocument(text, deps) {
           total: level.length,
           etaSeconds: eta(level.slice(i).reduce((sum, p) => sum + cost.combine(p.length, false), 0)),
         });
-        condensed.push(await call(() => llm.combine([level[i]], { final: false }), cost.combine(level[i].length, false)));
+        condensed.push(
+          await call(() => llm.combine([level[i]], { final: false, tight: true }), cost.combine(level[i].length, false))
+        );
       }
       level = condensed;
-      limit = batchLimitFor(level);
-      batches = packBatches(level, limit);
+      ({ batches, limit } = pack(level));
+      if (!batches) {
+        throw new Error(
+          `Long-document summary did not converge (${level.length} partial summaries of ${sizes(level)} chars cannot be merged within ${limit} chars)`
+        );
+      }
     }
 
     log.log(`[longSummarize] level ${depth}: ${level.length} partials (sizes ${sizes(level)}) -> ${batches.length} batch(es), limit ${limit} chars`);
-    const isFinal = batches.length === 1;
 
-    if (isFinal) {
+    if (batches.length === 1) {
       const joined = batches[0].join(BATCH_SEPARATOR);
       onProgress({ stage: "final", done: 0, total: 1, etaSeconds: eta(cost.combine(joined.length, true)) });
       const summary = await call(() => llm.combine(batches[0], { final: true }), cost.combine(joined.length, true));
       return { text: summary, calls, chunks: chunks.length };
-    }
-
-    if (batches.length >= level.length) {
-      throw new Error(
-        `Long-document summary did not converge (${level.length} partial summaries of ${sizes(level)} chars cannot be merged within ${limit} chars)`
-      );
     }
 
     const next = [];

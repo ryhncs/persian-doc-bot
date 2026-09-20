@@ -61,7 +61,13 @@ const CHUNK_SYSTEM_PROMPT = `تو دستیار درسی هستی. کاربر ی�
 فقط همین بخش را خلاصه کن و مقدمه یا نتیجه‌گیری اضافه ننویس.`;
 
 const COMBINE_SYSTEM_PROMPT = `تو دستیار درسی هستی. کاربر چند خلاصه‌ی پشت‌سرهم از بخش‌های یک سند درسی را می‌فرستد.
-آن‌ها را به یک خلاصه‌ی فشرده‌ی واحد تبدیل کن: نکته‌های تکراری را یکی کن، ترتیب مطالب را حفظ کن، هر نکته یک خط با خط تیره در ابتدای آن، حداکثر ۱۲ نکته.
+آن‌ها را به یک خلاصه‌ی فشرده‌ی واحد تبدیل کن: نکته‌های تکراری را یکی کن، ترتیب مطالب را حفظ کن، هر نکته یک خط با خط تیره در ابتدای آن، حداکثر ۸ نکته و هر نکته حداکثر دو جمله‌ی کوتاه.
+اصطلاحات تخصصی، فرمول‌ها، نام‌ها و اعداد مهم را دقیق نگه دار. مقدمه ننویس.`;
+
+// Used when merged partials refuse to get small enough to pair up: an even
+// tighter rewrite, so its (much smaller) output cap always leaves room to merge.
+const TIGHT_SYSTEM_PROMPT = `تو دستیار درسی هستی. کاربر یک خلاصه از بخشی از یک سند درسی را می‌فرستد.
+آن را به یک خلاصه‌ی خیلی فشرده‌تر تبدیل کن: فقط مهم‌ترین نکته‌ها، هر نکته یک خط کوتاه با خط تیره در ابتدای آن، حداکثر ۵ نکته.
 اصطلاحات تخصصی، فرمول‌ها، نام‌ها و اعداد مهم را دقیق نگه دار. مقدمه ننویس.`;
 
 const FINAL_SYSTEM_PROMPT = `تو یک دستیار درسی فارسی هستی. کاربر خلاصه‌های پشت‌سرهم بخش‌های یک جزوه، اسلاید یا مقاله را می‌فرستد.
@@ -72,7 +78,7 @@ const FINAL_SYSTEM_PROMPT = `تو یک دستیار درسی فارسی هستی
 // Completion caps (they count toward the per-minute budget, and gpt-oss spends
 // part of them on reasoning, hence "low" effort below). Generous on purpose: a
 // cap that reasoning eats entirely would return an empty answer.
-const MAX_OUT = { single: 1300, map: 800, combine: 900, final: 1300 };
+const MAX_OUT = { single: 1300, map: 800, combine: 700, tight: 450, final: 1300 };
 
 /**
  * One chat completion for the document flow. Resolves { text, totalTokens }
@@ -110,14 +116,16 @@ async function documentChat(systemPrompt, userText, maxTokens) {
 const documentLlm = {
   single: (text) => documentChat(DOCUMENT_SYSTEM_PROMPT, text, MAX_OUT.single),
   mapChunk: (chunk) => documentChat(CHUNK_SYSTEM_PROMPT, chunk, MAX_OUT.map),
-  combine: (partials, { final }) =>
-    final
-      ? documentChat(FINAL_SYSTEM_PROMPT, partials.join("\n\n"), MAX_OUT.final)
-      : documentChat(COMBINE_SYSTEM_PROMPT, partials.join("\n\n"), MAX_OUT.combine),
+  combine: (partials, { final, tight } = {}) => {
+    const joined = partials.join("\n\n");
+    if (final) return documentChat(FINAL_SYSTEM_PROMPT, joined, MAX_OUT.final);
+    if (tight) return documentChat(TIGHT_SYSTEM_PROMPT, joined, MAX_OUT.tight);
+    return documentChat(COMBINE_SYSTEM_PROMPT, joined, MAX_OUT.combine);
+  },
   promptChars: {
     single: DOCUMENT_SYSTEM_PROMPT.length,
     map: CHUNK_SYSTEM_PROMPT.length,
-    combine: Math.max(COMBINE_SYSTEM_PROMPT.length, FINAL_SYSTEM_PROMPT.length),
+    combine: Math.max(COMBINE_SYSTEM_PROMPT.length, TIGHT_SYSTEM_PROMPT.length, FINAL_SYSTEM_PROMPT.length),
   },
   maxOut: MAX_OUT,
 };

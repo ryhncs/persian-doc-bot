@@ -284,7 +284,7 @@ test("6 chunks whose partial summaries are longer than half a batch still conver
 
   // Every merge request stayed under the hard ceiling and the limiter cap.
   for (const c of llm.seen.combine) {
-    assert.ok(c.chars <= h.budget.hardBatchChars, `merge input ${c.chars} > ceiling ${h.budget.hardBatchChars}`);
+    assert.ok(c.chars <= h.budget.absoluteBatchChars, `merge input ${c.chars} > ceiling ${h.budget.absoluteBatchChars}`);
     const est = Math.ceil(c.chars / CHARS_PER_TOKEN) + Math.ceil(PROMPT_CHARS.combine / CHARS_PER_TOKEN) + MAX_OUT.final;
     assert.ok(est <= h.limiter.cap, `merge request ~${est} tokens exceeds cap ${h.limiter.cap}`);
   }
@@ -323,4 +323,126 @@ test("the error, if it ever does happen, says why (sizes and limit)", async () =
   });
   const h = harness(llm);
   await assert.rejects(() => h.run(longText(9000)), /did not converge \(\d+ partial summaries of 5000,/);
+});
+
+// Regression from the staging log: merging did not shrink anything (every merge
+// came back ~2,200 chars, the size of its own output cap), so the last two
+// partials (2245 + 2195 = 4442 chars) sat just over the 4288 ceiling and the run
+// died at "did not converge". Merges must always finish.
+function stubbornLlm({ mapChars, mergeChars, tightChars = 1000 }) {
+  const calls = { map: 0, merge: [], tight: [], final: [] };
+  const tokens = (s) => Math.ceil(s.length / CHARS_PER_TOKEN);
+  const filler = (n, tag) => `${tag} ${"- نکته ".repeat(Math.ceil(n / 7))}`.slice(0, n);
+  return {
+    promptChars: PROMPT_CHARS,
+    maxOut: MAX_OUT,
+    calls,
+    async single() {
+      return { text: "SINGLE", totalTokens: 1000 };
+    },
+    async mapChunk() {
+      const n = mapChars[calls.map++ % mapChars.length];
+      return { text: filler(n, "map"), totalTokens: 1500 };
+    },
+    async combine(partials, { final, tight } = {}) {
+      const chars = partials.join("\n\n").length;
+      if (final) {
+        calls.final.push(chars);
+        return { text: "FINAL SUMMARY", totalTokens: tokens(partials.join("")) + 900 };
+      }
+      if (tight) {
+        calls.tight.push(chars);
+        return { text: filler(tightChars, "tight"), totalTokens: 1200 };
+      }
+      calls.merge.push(chars);
+      return { text: filler(mergeChars, "merge"), totalTokens: tokens(partials.join("")) + 700 };
+    },
+  };
+}
+
+test("staging log: merges that never shrink below ~2200 chars still complete", async () => {
+  const llm = stubbornLlm({ mapChars: [2259, 2036, 1983, 1703, 2100, 1900], mergeChars: 2200 });
+  const h = harness(llm);
+  const result = await h.run(longText(16000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.equal(llm.calls.final.length, 1);
+  assert.ok(llm.calls.final[0] <= h.budget.absoluteBatchChars);
+  for (const chars of [...llm.calls.merge, ...llm.calls.tight, ...llm.calls.final]) {
+    const est = Math.ceil(chars / CHARS_PER_TOKEN) + Math.ceil(PROMPT_CHARS.combine / CHARS_PER_TOKEN) + MAX_OUT.final;
+    assert.ok(est <= h.limiter.cap, `a ${chars}-char merge (~${est} tokens) exceeds the limiter cap ${h.limiter.cap}`);
+  }
+  assert.ok(h.peak() <= h.limiter.cap);
+});
+
+test("two partials just over the usual ceiling (2245 + 2195) merge straight into the final summary", async () => {
+  const llm = stubbornLlm({ mapChars: [2245, 2195], mergeChars: 2200 });
+  const h = harness(llm);
+  assert.ok(2245 + 2195 + 2 > h.budget.hardBatchChars, "premise: over the 80% ceiling");
+  assert.ok(2245 + 2195 + 2 <= h.budget.absoluteBatchChars, "premise: under the absolute ceiling");
+
+  const result = await h.run(longText(5000)); // two chunks
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.equal(llm.calls.map, 2);
+  assert.equal(llm.calls.merge.length, 0, "no intermediate merge was needed");
+  assert.equal(llm.calls.tight.length, 0, "and no tight condensing");
+  assert.equal(llm.calls.final.length, 1);
+});
+
+test("if even the absolute ceiling can't hold two, each partial is condensed with the tight prompt, then merged", async () => {
+  const llm = stubbornLlm({ mapChars: [3600, 3500], mergeChars: 2200, tightChars: 1000 });
+  const h = harness(llm);
+  assert.ok(3600 + 3500 > h.budget.absoluteBatchChars, "premise: doesn't fit even the absolute ceiling");
+
+  const result = await h.run(longText(5000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.deepEqual(llm.calls.tight, [3600, 3500], "each partial condensed on its own with the tight prompt");
+  assert.equal(llm.calls.merge.length, 0);
+  assert.equal(llm.calls.final.length, 1);
+  assert.ok(llm.calls.final[0] < 2100, "the final merge saw the condensed partials");
+});
+
+test("a large document with stubborn ~2200-char merges terminates in a bounded number of calls", async () => {
+  const llm = stubbornLlm({ mapChars: [2200], mergeChars: 2200 });
+  const h = harness(llm);
+  const result = await h.run(longText(40000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.ok(result.calls < 60, `took ${result.calls} calls`);
+});
+
+test("the real prompts define a tight condense step with a smaller output cap than a normal merge", () => {
+  process.env.GROQ_API_KEY = "test-key";
+  const { documentLlm } = require("../src/services/summarize");
+  assert.ok(documentLlm.maxOut.tight < documentLlm.maxOut.combine);
+  assert.ok(documentLlm.maxOut.combine < documentLlm.maxOut.map + 1);
+  assert.equal(typeof documentLlm.combine, "function");
+});
+
+test("documentLlm.combine sends the right prompt and output cap to Groq for normal, tight and final merges", async () => {
+  process.env.GROQ_API_KEY = "test-key";
+  const { documentLlm } = require("../src/services/summarize");
+  const bodies = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ choices: [{ message: { content: "x" }, finish_reason: "stop" }], usage: { total_tokens: 100 } }),
+    };
+  };
+  try {
+    await documentLlm.combine(["a", "b"], { final: false });
+    await documentLlm.combine(["a"], { final: false, tight: true });
+    await documentLlm.combine(["a", "b"], { final: true });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const [normal, tight, final] = bodies;
+  assert.equal(normal.max_completion_tokens, documentLlm.maxOut.combine);
+  assert.equal(tight.max_completion_tokens, documentLlm.maxOut.tight);
+  assert.equal(final.max_completion_tokens, documentLlm.maxOut.final);
+  assert.match(tight.messages[0].content, /خیلی فشرده‌تر/);
+  assert.doesNotMatch(normal.messages[0].content, /خیلی فشرده‌تر/);
+  assert.ok(documentLlm.promptChars.combine >= tight.messages[0].content.length, "budget accounts for the tight prompt");
 });
