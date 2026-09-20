@@ -205,6 +205,12 @@ and the last merge writes the final structured summary (`longSummarize.js`).
   under 90% of `GROQ_TPM_LIMIT`, using the token usage Groq reports back. If Groq
   still answers 429 (voice summaries share the same quota), the request waits for
   `Retry-After` and retries, up to four times.
+- **Merging always converges.** Real Persian partial summaries can be longer than
+  half a normal merge request, so the merge size is lifted just enough to fit two
+  of the largest partials (never past 80% of the per-minute cap), and partials too
+  big to pair are first condensed one by one. Each level logs the sizes it saw
+  (`[longSummarize] level N: ...`), and the "did not converge" error, if it ever
+  appears, lists them.
 - **It takes time.** Throughput is capped by the budget: about 5,000 characters
   per minute. The bot edits its "processing" message with the current part and a
   time estimate, and deletes it when the summary arrives.

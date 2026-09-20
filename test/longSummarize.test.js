@@ -242,3 +242,85 @@ test("packBatches keeps order, respects the size limit, and never drops an overs
   assert.deepEqual(packBatches(["x".repeat(50), "y"], 10), [["x".repeat(50)], ["y"]]);
   assert.deepEqual(packBatches([], 10), []);
 });
+
+// Regression: on staging a 6-part PDF died at the merge step with "did not
+// converge". Real partial summaries are ~1000-3000 chars of Persian, and the
+// usual batch size (~1900 chars) could not hold two of them, so nothing shrank.
+// (The other fakes in this file use tiny partials, which hid it.)
+function bigPartialsLlm(partialChars, mergedChars = 900) {
+  const seen = { mapChunk: 0, combine: [] };
+  const tokens = (s) => Math.ceil(s.length / CHARS_PER_TOKEN);
+  return {
+    promptChars: PROMPT_CHARS,
+    maxOut: MAX_OUT,
+    seen,
+    async single(text) {
+      return { text: "SINGLE", totalTokens: tokens(text) + 700 };
+    },
+    async mapChunk(chunk) {
+      seen.mapChunk += 1;
+      return { text: "- نکته ".repeat(Math.ceil(partialChars / 7)).slice(0, partialChars), totalTokens: tokens(chunk) + 800 };
+    },
+    async combine(partials, { final }) {
+      const joined = partials.join("\n\n");
+      seen.combine.push({ partials, final, chars: joined.length });
+      return {
+        text: final ? "FINAL SUMMARY" : "- خلاصه ".repeat(Math.ceil(mergedChars / 8)).slice(0, mergedChars),
+        totalTokens: tokens(joined) + 800,
+      };
+    },
+  };
+}
+
+test("6 chunks whose partial summaries are longer than half a batch still converge", async () => {
+  const llm = bigPartialsLlm(2300);
+  const h = harness(llm);
+  assert.ok(2300 * 2 > h.budget.batchChars, "premise: two partials do not fit the usual batch");
+
+  const result = await h.run(longText(9000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.ok(llm.seen.mapChunk >= 4);
+  assert.equal(llm.seen.combine.at(-1).final, true);
+
+  // Every merge request stayed under the hard ceiling and the limiter cap.
+  for (const c of llm.seen.combine) {
+    assert.ok(c.chars <= h.budget.hardBatchChars, `merge input ${c.chars} > ceiling ${h.budget.hardBatchChars}`);
+    const est = Math.ceil(c.chars / CHARS_PER_TOKEN) + Math.ceil(PROMPT_CHARS.combine / CHARS_PER_TOKEN) + MAX_OUT.final;
+    assert.ok(est <= h.limiter.cap, `merge request ~${est} tokens exceeds cap ${h.limiter.cap}`);
+  }
+  assert.ok(h.peak() <= h.limiter.cap, "pacing still holds");
+});
+
+test("partials too big to pair are condensed one by one, then merged", async () => {
+  const llm = bigPartialsLlm(3000, 1200); // 3000 > half of the hard ceiling
+  const h = harness(llm);
+  assert.ok(3000 * 2 + 2 > h.budget.hardBatchChars, "premise: not even two fit the hard ceiling");
+
+  const result = await h.run(longText(9000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  const singles = llm.seen.combine.filter((c) => c.partials.length === 1 && !c.final);
+  assert.ok(singles.length >= 4, "each oversized partial was condensed alone first");
+  assert.equal(llm.seen.combine.at(-1).final, true);
+});
+
+test("a big document (many chunks, big partials) still finishes with one final merge", async () => {
+  const llm = bigPartialsLlm(2000);
+  const h = harness(llm);
+  const result = await h.run(longText(40000));
+  assert.equal(result.text, "FINAL SUMMARY");
+  assert.equal(llm.seen.combine.filter((c) => c.final).length, 1);
+  assert.ok(h.peak() <= h.limiter.cap);
+});
+
+test("the error, if it ever does happen, says why (sizes and limit)", async () => {
+  const llm = fakeLlm({
+    async mapChunk() {
+      return { text: "x".repeat(5000), totalTokens: 1500 };
+    },
+    async combine() {
+      return { text: "x".repeat(5000), totalTokens: 1500 };
+    },
+  });
+  const h = harness(llm);
+  await assert.rejects(() => h.run(longText(9000)), /did not converge \(\d+ partial summaries of 5000,/);
+});

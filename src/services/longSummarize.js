@@ -29,6 +29,12 @@ function deriveBudget({ tpm, charsPerToken, promptChars, maxOut }) {
     requestTokens,
     chunkChars: Math.max(min, Math.floor((requestTokens - tokens(promptChars.map) - maxOut.map) * charsPerToken)),
     batchChars: Math.max(min, Math.floor((requestTokens - tokens(promptChars.combine) - maxOut.final) * charsPerToken)),
+    // Ceiling for a merge request when the usual size can't fit two partial
+    // summaries: 80% of what the limiter would ever let through in a minute.
+    hardBatchChars: Math.max(
+      min,
+      Math.floor((Math.floor(tpm * 0.9 * 0.8) - tokens(promptChars.combine) - maxOut.final) * charsPerToken)
+    ),
     // One-request path: only when it fits comfortably in a single window.
     singleShotChars: Math.max(
       min,
@@ -128,9 +134,43 @@ async function summarizeDocument(text, deps) {
     partials.push(await call(() => llm.mapChunk(chunks[i], { index: i + 1, total: chunks.length }), mapCosts[i]));
   }
 
+  // Each level must merge at least two partials per batch or it can't shrink.
+  // The usual batch size is sized for pacing, not correctness: real Persian
+  // partial summaries can be longer than half of it. So the limit is lifted
+  // just enough to fit two of the largest items, never past the hard ceiling;
+  // and if even that can't fit two, every item is condensed on its own first.
+  const hardChars = budget.hardBatchChars || budget.batchChars;
+  const batchLimitFor = (items) => {
+    const largestPair = 2 * Math.max(...items.map((p) => p.length)) + BATCH_SEPARATOR.length;
+    return Math.min(hardChars, Math.max(budget.batchChars, largestPair));
+  };
+  const sizes = (items) => items.map((p) => p.length).join(",");
+
   let level = partials;
   for (let depth = 0; depth < MAX_REDUCE_LEVELS; depth++) {
-    const batches = packBatches(level, budget.batchChars);
+    let limit = batchLimitFor(level);
+    let batches = packBatches(level, limit);
+
+    if (batches.length > 1 && batches.length >= level.length) {
+      log.warn(
+        `[longSummarize] level ${depth}: no two partials fit in ${limit} chars (sizes ${sizes(level)}); condensing each on its own first`
+      );
+      const condensed = [];
+      for (let i = 0; i < level.length; i++) {
+        onProgress({
+          stage: "combine",
+          done: i,
+          total: level.length,
+          etaSeconds: eta(level.slice(i).reduce((sum, p) => sum + cost.combine(p.length, false), 0)),
+        });
+        condensed.push(await call(() => llm.combine([level[i]], { final: false }), cost.combine(level[i].length, false)));
+      }
+      level = condensed;
+      limit = batchLimitFor(level);
+      batches = packBatches(level, limit);
+    }
+
+    log.log(`[longSummarize] level ${depth}: ${level.length} partials (sizes ${sizes(level)}) -> ${batches.length} batch(es), limit ${limit} chars`);
     const isFinal = batches.length === 1;
 
     if (isFinal) {
@@ -141,7 +181,9 @@ async function summarizeDocument(text, deps) {
     }
 
     if (batches.length >= level.length) {
-      throw new Error("Long-document summary did not converge (partial summaries are larger than a batch)");
+      throw new Error(
+        `Long-document summary did not converge (${level.length} partial summaries of ${sizes(level)} chars cannot be merged within ${limit} chars)`
+      );
     }
 
     const next = [];
