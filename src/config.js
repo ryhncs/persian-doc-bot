@@ -97,6 +97,31 @@ const SUBSCRIPTION_DAYS = 30;
 // after that, photos go back to being treated as "compress this image".
 const PENDING_PAYMENT_TTL_HOURS = 24;
 
+// --- Referrals: an invitee's first delivered billable request gives both sides
+// bonus requests (on top of the weekly allowance); every N successful referrals
+// earns the referrer a discount coupon. Tracked in Supabase (fails open).
+const intEnv = (name, fallback, min = 0) => {
+  const n = parseInt(process.env[name], 10);
+  return Number.isInteger(n) && n >= min ? n : fallback;
+};
+const REFERRAL_BONUS_REQUESTS = intEnv("REFERRAL_BONUS_REQUESTS", 2);
+// Only a user's first N successful referrals earn them the bonus (limits
+// farming with fake accounts); coupons keep counting past it.
+const REFERRAL_BONUS_CAP = intEnv("REFERRAL_BONUS_CAP", 10);
+const REFERRALS_PER_COUPON = intEnv("REFERRALS_PER_COUPON", 3, 1);
+const COUPON_DISCOUNT_PERCENT = Math.min(intEnv("COUPON_DISCOUNT_PERCENT", 20), 100);
+// Used for invite links until Telegram's getMe answers with the real username.
+const BOT_USERNAME = (process.env.BOT_USERNAME || "koolehbot").replace(/^@/, "");
+
+// --- Audio version of a summary (text to speech). Uses the free, unofficial
+// Microsoft Edge read-aloud endpoint (no key, no cost). Set TTS_ENABLED=false to
+// hide the button. Users who aren't paying from the weekly quota (subscribers,
+// or everyone while the database is down) get a daily cap so cost and load stay
+// bounded.
+const TTS_ENABLED = !/^(false|0|no|off)$/i.test((process.env.TTS_ENABLED || "").trim());
+const TTS_VOICE = process.env.TTS_VOICE || "fa-IR-DilaraNeural";
+const SUBSCRIBER_AUDIO_PER_DAY = intEnv("SUBSCRIBER_AUDIO_PER_DAY", 15, 1);
+
 const MISSING_MONETIZATION_VARS = Object.entries({
   SUPABASE_URL,
   SUPABASE_KEY,
@@ -134,6 +159,14 @@ module.exports = {
   FREE_REQUESTS_PER_WEEK,
   SUBSCRIPTION_DAYS,
   PENDING_PAYMENT_TTL_HOURS,
+  REFERRAL_BONUS_REQUESTS,
+  REFERRAL_BONUS_CAP,
+  REFERRALS_PER_COUPON,
+  COUPON_DISCOUNT_PERCENT,
+  BOT_USERNAME,
+  TTS_ENABLED,
+  TTS_VOICE,
+  SUBSCRIBER_AUDIO_PER_DAY,
   MISSING_MONETIZATION_VARS,
   MONETIZATION_ENABLED,
 };

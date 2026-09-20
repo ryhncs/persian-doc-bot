@@ -140,6 +140,27 @@ function createSupabaseStore({
       return rows[0] || null;
     },
 
+    // General compare-and-set: applies `fields` to the row only if every column
+    // in `expected` still has the given value (null means "is null"). Returns
+    // the updated row, or null if the row changed (or is missing) since the
+    // caller read it. The referral and coupon bookkeeping is built on this.
+    async tryUpdate(id, expected, fields) {
+      assertUserId(id);
+      let query = `?telegram_user_id=eq.${id}`;
+      for (const [column, value] of Object.entries(expected)) {
+        if (!/^[a-z_]+$/.test(column)) throw new Error(`Invalid column name: ${column}`);
+        query += value === null ? `&${column}=is.null` : `&${column}=eq.${enc(String(value))}`;
+      }
+      const rows = await request("PATCH", query, { body: fields, prefer: "return=representation" });
+      return rows[0] || null;
+    },
+
+    async getUserByReferralCode(code) {
+      if (!/^[A-Za-z0-9]{4,16}$/.test(String(code))) return null;
+      const rows = await request("GET", `?referral_code=eq.${enc(code)}&select=*&limit=1`);
+      return rows[0] || null;
+    },
+
     async tryDecrement(id, expectedCount, nowIso) {
       assertUserId(id);
       const rows = await request(

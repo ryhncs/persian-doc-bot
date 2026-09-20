@@ -2,6 +2,7 @@ const config = require("../config");
 const { modes, MODES } = require("../services/userMode");
 const { formatNumber } = require("../utils/format");
 const { sendSubscriptionInfo } = require("./payment");
+const { sendInviteInfo } = require("./referral");
 
 // The persistent menu under the message box. Each label arrives as an ordinary
 // text message when tapped, so bot.js checks isMenuLabel() before treating a
@@ -12,6 +13,7 @@ const MENU = {
   TRANSLATE: "🌐 ترجمه و ساده‌سازی متن",
   COMPRESS: "🗜 فشرده‌سازی عکس و PDF",
   SUBSCRIBE: "💳 خرید اشتراک",
+  INVITE: "🎁 دعوت دوستان",
 };
 
 const LABELS = new Set(Object.values(MENU));
@@ -21,7 +23,7 @@ function mainMenuKeyboard() {
     keyboard: [
       [MENU.VOICE, MENU.PDF],
       [MENU.TRANSLATE, MENU.COMPRESS],
-      [MENU.SUBSCRIBE],
+      [MENU.SUBSCRIBE, MENU.INVITE],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -74,6 +76,10 @@ async function handleMenuButton(bot, msg) {
     case MENU.SUBSCRIBE:
       modes.clear(userId);
       await sendSubscriptionInfo(bot, chatId, userId);
+      return;
+    case MENU.INVITE:
+      modes.clear(userId);
+      await sendInviteInfo(bot, chatId, userId);
       return;
     default:
       return;

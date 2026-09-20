@@ -7,6 +7,8 @@ const { GroqRateLimitError } = require("../services/groqClient");
 const { checkGlobalMinuteRate } = require("../services/rateLimiter");
 const { formatNumber } = require("../utils/format");
 const { gatePremiumFeature, releasePremiumFeature } = require("./payment");
+const { audioButtonRows } = require("./audioVersion");
+const { afterDelivery } = require("./referral");
 
 const PROCESSING_SUMMARY = "⏳ در حال استخراج و خلاصه‌سازی متن پی‌دی‌اف...";
 const NO_TEXT_LAYER =
@@ -105,10 +107,12 @@ async function runPdfSummary(bot, chatId, userId, fileId) {
             { text: "متن کامل", callback_data: `vs:full:${newSessionId}` },
             { text: "خروجی Word", callback_data: `vs:docx:${newSessionId}` },
           ],
+          ...audioButtonRows(newSessionId),
         ],
       },
     });
     succeeded = true;
+    afterDelivery(bot, userId).catch(() => {});
   } catch (err) {
     console.error("PDF summarization failed:", {
       chatId,

@@ -154,10 +154,10 @@ test("fails open when the database is unreachable", async () => {
 
 test("payment state: pending within the TTL, not after it, never while subscribed", async () => {
   const { usage, clock } = setup();
-  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: false, subscribedUntil: null });
+  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: false, subscribedUntil: null, coupons: 0 });
 
   await usage.markPaymentPending(42);
-  assert.deepEqual(await usage.getPaymentState(42), { pending: true, subscribed: false, subscribedUntil: null });
+  assert.deepEqual(await usage.getPaymentState(42), { pending: true, subscribed: false, subscribedUntil: null, coupons: 0 });
 
   clock.advance(23 * 60 * 60 * 1000);
   assert.equal((await usage.getPaymentState(42)).pending, true);
@@ -167,7 +167,7 @@ test("payment state: pending within the TTL, not after it, never while subscribe
 
   await usage.markPaymentPending(42);
   const expiresAt = await usage.activateSubscription(42, 30);
-  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: true, subscribedUntil: expiresAt });
+  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: true, subscribedUntil: expiresAt, coupons: 0 });
 });
 
 test("rejectPayment keeps the user pending so a corrected receipt still reaches the admin", async () => {

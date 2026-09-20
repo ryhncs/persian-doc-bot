@@ -6,8 +6,8 @@ input.
 
 Everything starts from a persistent menu under the message box (shown after
 `/start`): **🎙 خلاصه پیام صوتی**, **📄 خلاصه جزوه PDF**, **🌐 ترجمه و
-ساده‌سازی متن**, **🗜 فشرده‌سازی عکس و PDF** and **💳 خرید اشتراک**. See
-[The menu](#the-menu).
+ساده‌سازی متن**, **🗜 فشرده‌سازی عکس و PDF**, **💳 خرید اشتراک** and
+**🎁 دعوت دوستان**. See [The menu](#the-menu).
 
 1. **Word export** — send any messy pasted text, get back a clean, RTL,
    properly fonted `.docx` file. Always free.
@@ -79,6 +79,14 @@ text).
 | `ADMIN_CHAT_ID`                | for limits | —                     | Telegram user id (or group chat id) that receives payment receipts with ✅/❌ buttons. The admin must press Start on the bot once. |
 | `ADMIN_CONTACT`                | no       | unset                      | Shown to users whose payment was rejected, e.g. `@your_username`. |
 | `FREE_REQUESTS_PER_WEEK`       | no       | `3`                        | Free AI-feature requests per user per rolling 7 days. |
+| `REFERRAL_BONUS_REQUESTS`     | no       | `2`                        | Extra free requests each side gets when an invitee's first request is delivered (see [Referrals](#referrals-and-discount-coupons)). |
+| `REFERRAL_BONUS_CAP`          | no       | `10`                       | A user's first N successful referrals earn them the bonus (limits farming with fake accounts). Coupons keep counting after it. |
+| `REFERRALS_PER_COUPON`        | no       | `3`                        | Successful referrals needed for each discount coupon. |
+| `COUPON_DISCOUNT_PERCENT`     | no       | `20`                       | Discount of one coupon on a subscription purchase. |
+| `BOT_USERNAME`                | no       | `koolehbot`                | Used in invite links until Telegram's `getMe` answers with the real username. |
+| `TTS_ENABLED`                 | no       | `true`                     | Set `false` to hide the "🔊 دریافت نسخه صوتی" button (see [Audio versions](#audio-versions-of-summaries)). |
+| `TTS_VOICE`                   | no       | `fa-IR-DilaraNeural`       | Edge voice; the other Persian voice is `fa-IR-FaridNeural` (male). |
+| `SUBSCRIBER_AUDIO_PER_DAY`    | no       | `15`                       | Daily cap on audio versions for users who aren't paying from the weekly quota (subscribers). |
 
 "for limits" = enforcement only switches on when **all five** of
 `SUPABASE_URL`, `SUPABASE_KEY`, `SUBSCRIPTION_PRICE_TOMAN`, `CARD_NUMBER` and
@@ -122,6 +130,8 @@ src/
     pdfSummary.js              PDF summary flow with live progress (inline buttons and the menu button)
     payment.js                Paywall, receipt-photo forwarding to the admin, ✅/❌ approval buttons
     admin.js                   Admin-only /status and the "database is failing" alert
+    referral.js                 Invite link/status (🎁 دعوت دوستان, /invite), /start ref_<code>, bonus and coupon notices
+    audioVersion.js             The "🔊 دریافت نسخه صوتی" button: gate, daily cap, synthesize, send voice, refund on failure
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -140,6 +150,9 @@ src/
     tpmLimiter.js                      Sliding-window tokens-per-minute limiter
     textChunker.js                     Splits long text into chunks on line/sentence boundaries, losing nothing
     supabaseStore.js                    Supabase (PostgREST) client for the `users` table, plain fetch
+    referrals.js                        Referral codes, attribution, bonus payout on first delivered request, coupons (fails open)
+    tts.js                              Summary text → speech: text prep, Edge TTS (free, unofficial), MP3 → OGG/Opus
+    dailyCap.js                         Rolling 24 h per-user cap (subscriber audio)
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
     format.js                        Persian numbers/dates, HTML escaping
@@ -173,7 +186,8 @@ restarts or run across multiple instances.
 `/start` shows the welcome text with a persistent reply keyboard (buttons
 under the message box, not attached to a message); `/help` shows the same
 keyboard again. Each button is an ordinary text message, so `bot.js` checks for
-the five labels before treating text as "convert this to Word".
+the six labels before treating text as "convert this to Word". `/invite` does
+the same as **🎁 دعوت دوستان**.
 
 | Button | What it does |
 | --- | --- |
@@ -181,7 +195,8 @@ the five labels before treating text as "convert this to Word".
 | 📄 خلاصه جزوه PDF | Your next PDF is summarized directly (no "summarize or compress?" question). |
 | 🌐 ترجمه و ساده‌سازی متن | Your next text is translated to Persian and simplified directly (no Word file). |
 | 🗜 فشرده‌سازی عکس و PDF | Your next photo or PDF is compressed directly. |
-| 💳 خرید اشتراک | Price, card number and receipt instructions (or the subscription end date if already subscribed). |
+| 💳 خرید اشتراک | Price, card number and receipt instructions (or the subscription end date if already subscribed), plus your discount price if you hold a coupon. |
+| 🎁 دعوت دوستان | Your invite link, the rules, and your status (successful referrals, coupons, bonus requests). |
 
 These "next message" choices last 10 minutes, are used once, and are dropped
 if you send anything that doesn't match (see `src/services/userMode.js`). With no
@@ -222,6 +237,68 @@ and the last merge writes the final structured summary (`longSummarize.js`).
   from using it up.
 
 Short documents (a few thousand characters) still go in a single request.
+
+## Audio versions of summaries
+
+Under every voice-message and PDF summary there is a second row with
+**🔊 دریافت نسخه صوتی**. It is opt-in: the text summary is delivered first and
+never waits for it. Tapping it speaks the same summary text and sends it as a
+Telegram voice message.
+
+- **Cost to the user.** Every tap is one billable request, exactly like any
+  other: it counts against the weekly free quota (a subscriber is unlimited) and
+  is refunded if no audio is delivered. Tapping again on the same summary
+  charges again (nothing is cached).
+- **Daily cap.** Users who aren't paying from the weekly quota (subscribers, and
+  everyone while the database is down) can make at most `SUBSCRIBER_AUDIO_PER_DAY`
+  (15) audio versions in a rolling 24 hours, so audio stays bounded. One
+  conversion per user runs at a time.
+- **How it works.** `services/tts.js` cleans the summary for speech (bullets,
+  markdown and emoji removed, one sentence per line), synthesizes it with
+  Microsoft Edge's read-aloud voices through the `edge-tts-universal` package
+  (default `fa-IR-DilaraNeural`), and `audioConvert.js` transcodes the MP3 to
+  OGG/Opus, the format Telegram plays as a voice note.
+- **Free, but unofficial.** No API key and no cost, but it is an unofficial
+  Microsoft endpoint that can change or be blocked without notice. If it fails
+  the user gets a friendly error and the request is refunded. To move to a paid
+  provider later (e.g. Azure Speech, which has the same Persian voices), only
+  `synthesizeSpeech()` in `src/services/tts.js` needs to change.
+- **Limits.** The button works while the summary is still in the in-memory
+  session store (6 hours, and not across a restart; then it says the session
+  expired). English terms inside Persian text are read with a Persian accent.
+  Set `TTS_ENABLED=false` to hide the button.
+
+## Referrals and discount coupons
+
+Every user has an invite link, `https://t.me/<bot>?start=ref_<code>`, shown by
+**🎁 دعوت دوستان** or `/invite` together with their status. State lives in the
+same Supabase `users` table (run the updated `supabase/schema.sql`; it is safe
+to re-run).
+
+- **Attribution.** Opening the link records who invited the user (`referred_by`),
+  but only for a *new* user: one with no delivered billable request yet, never
+  yourself, and only once. Pressing Start pays nothing.
+- **The +2 bonus.** It is paid when the invitee's first billable request has
+  actually been **delivered** (a voice or PDF summary, a translation, or an audio
+  version). Both sides get `REFERRAL_BONUS_REQUESTS` (2) extra requests, spent
+  only after the weekly free allowance and kept across weekly resets. Compression
+  is free, so it doesn't qualify, and a request that fails and is refunded doesn't
+  either. Each step is a compare-and-set, so concurrent requests can't pay the
+  same bonus twice.
+- **Cap.** A user's first `REFERRAL_BONUS_CAP` (10) successful referrals earn
+  them the +2. After that their invitees still get theirs and the referral still
+  counts toward coupons.
+- **Coupons.** Every `REFERRALS_PER_COUPON` (3) successful referrals earns one
+  `COUPON_DISCOUNT_PERCENT` (20%) coupon. Coupons bank up and never expire.
+  A user holding one sees the discounted price on the paywall and the 💳 screen
+  (120,000 becomes 96,000 toman), and the receipt sent to the admin shows the
+  expected amount; the admin's ✅ button then carries a coupon flag
+  (`pay:approve:<id>:d`). Approving redeems exactly one coupon and resets the
+  referral count (`referral_progress`) to 0, so 3 more referrals are needed for
+  the next one; coupons that were already banked are kept.
+- **If the database is down** the bot keeps working; referral bonuses and coupons
+  simply aren't tracked or applied during the outage, and `/invite` says it
+  can't build the link right now.
 
 ## Free tier & subscriptions
 

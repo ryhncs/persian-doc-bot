@@ -7,6 +7,8 @@ const RECEIPT_RECEIVED =
 const RECEIPT_ALREADY_SENT = "رسیدت رو قبلاً گرفتم و در حال بررسیه، یه کم صبر کن 🙏";
 const RECEIPT_ERROR = "ارسال رسید با مشکل مواجه شد. چند دقیقه دیگه دوباره امتحان کن.";
 const ADMIN_ONLY = "این دکمه فقط برای ادمینه.";
+// Text of the menu button (see handlers/menu.js), quoted in the paywall.
+const INVITE_LABEL = "🎁 دعوت دوستان";
 const ADMIN_SAVE_FAILED = "❌ ذخیره‌ی وضعیت در دیتابیس ناموفق بود. دوباره امتحان کن.";
 
 const FORWARD_COOLDOWN_MS = 15 * 1000;
@@ -23,34 +25,60 @@ function parseUserId(raw) {
 function createPaymentHandlers({ usage, config, now = () => Date.now(), log = console }) {
   const lastForwardAt = new Map(); // userId -> ms, to stop receipt spam to the admin
 
-  // Price, card and receipt instructions: shared by the out-of-quota paywall
-  // and the "💳 خرید اشتراک" menu button.
-  function paymentLines() {
-    return [
-      `💰 قیمت: ${escapeHtml(formatNumber(config.SUBSCRIPTION_PRICE_TOMAN))} تومان در ماه (${formatNumber(config.SUBSCRIPTION_DAYS)} روز)، یعنی روزی کمتر از یه بلیط مترو 🚇`,
-      `💳 شماره کارت: <code>${escapeHtml(config.CARD_NUMBER)}</code>`,
-      "",
-      "بعد از کارت‌به‌کارت، یه اسکرین‌شات از رسید پرداخت رو همین‌جا به‌صورت عکس برام بفرست. بعد از بررسی و تایید، اشتراکت فعال می‌شه ✅",
-    ];
+  const percent = config.COUPON_DISCOUNT_PERCENT || 0;
+
+  // Price after one coupon, or null if the configured price isn't a plain number.
+  function discountedPrice() {
+    const price = Number(config.SUBSCRIPTION_PRICE_TOMAN);
+    return Number.isFinite(price) ? Math.round((price * (100 - percent)) / 100) : null;
   }
 
-  function subscribeInfoText() {
+  // Price, card and receipt instructions: shared by the out-of-quota paywall
+  // and the "💳 خرید اشتراک" menu button. A user holding a discount coupon sees
+  // their discounted price (it is applied automatically when the admin approves).
+  function paymentLines(coupons = 0) {
+    const lines = [
+      `💰 قیمت: ${escapeHtml(formatNumber(config.SUBSCRIPTION_PRICE_TOMAN))} تومان در ماه (${formatNumber(config.SUBSCRIPTION_DAYS)} روز)`,
+    ];
+    if (coupons > 0) {
+      const discounted = discountedPrice();
+      lines.push(
+        discounted === null
+          ? `🎟 کوپن تخفیف ${formatNumber(percent)}٪ داری و روی این خرید اعمال می‌شه.`
+          : `🎟 کوپن تخفیف ${formatNumber(percent)}٪ داری: قیمت برای تو ${escapeHtml(formatNumber(discounted))} تومان. همین مبلغ رو واریز کن.`
+      );
+    }
+    lines.push(
+      `💳 شماره کارت: <code>${escapeHtml(config.CARD_NUMBER)}</code>`,
+      "",
+      "بعد از کارت‌به‌کارت، یه اسکرین‌شات از رسید پرداخت رو همین‌جا به‌صورت عکس برام بفرست. بعد از بررسی و تایید، اشتراکت فعال می‌شه ✅"
+    );
+    return lines;
+  }
+
+  const referralLine = `🎁 دوستانت رو دعوت کن تا درخواست رایگان و کوپن تخفیف بگیری: از منوی «${INVITE_LABEL}» لینکت رو بردار.`;
+
+  function subscribeInfoText(coupons = 0) {
     return [
       "💳 اشتراک ماهانه‌ی کوله",
       "",
       "با اشتراک، بدون محدودیت پیام صوتی و جزوه PDF رو خلاصه می‌کنی و متن‌ها رو ترجمه و ساده می‌کنی.",
       "",
-      ...paymentLines(),
+      ...paymentLines(coupons),
+      "",
+      referralLine,
     ].join("\n");
   }
 
-  function paywallText(gate) {
+  function paywallText(gate, coupons = 0) {
     const lines = [
       `🔒 سهمیه‌ی رایگان این هفته‌ات (${formatNumber(gate.limit)} درخواست) تموم شد.`,
       "",
       "برای استفاده‌ی نامحدود از خلاصه‌سازی صوت و PDF و ترجمه، اشتراک ماهانه‌ی کوله رو بگیر:",
       "",
-      ...paymentLines(),
+      ...paymentLines(coupons),
+      "",
+      referralLine,
     ];
 
     if (gate.resetAt) {
@@ -66,7 +94,8 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
   async function sendPaywall(bot, chatId, userId, gate) {
     // From here on a photo from this user is treated as a payment receipt.
     await usage.markPaymentPending(userId);
-    await bot.sendMessage(chatId, paywallText(gate), { parse_mode: "HTML" });
+    const { coupons } = await usage.getPaymentState(userId);
+    await bot.sendMessage(chatId, paywallText(gate, coupons), { parse_mode: "HTML" });
   }
 
   /**
@@ -80,7 +109,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
       return;
     }
 
-    const { subscribed, subscribedUntil } = await usage.getPaymentState(userId);
+    const { subscribed, subscribedUntil, coupons } = await usage.getPaymentState(userId);
     if (subscribed) {
       await bot.sendMessage(
         chatId,
@@ -90,7 +119,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
     }
 
     await usage.markPaymentPending(userId);
-    await bot.sendMessage(chatId, subscribeInfoText(), { parse_mode: "HTML" });
+    await bot.sendMessage(chatId, subscribeInfoText(coupons), { parse_mode: "HTML" });
   }
 
   /**
@@ -117,7 +146,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
     if (!usage.enabled) return false;
 
     const userId = msg.from.id;
-    const { pending } = await usage.getPaymentState(userId);
+    const { pending, coupons } = await usage.getPaymentState(userId);
     if (!pending) return false;
 
     const chatId = msg.chat.id;
@@ -131,12 +160,16 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
     const largest = msg.photo[msg.photo.length - 1];
     const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "-";
     const handle = msg.from.username ? `@${msg.from.username}` : "(بدون یوزرنیم)";
-    const caption = [
-      "💳 رسید پرداخت جدید",
-      `👤 ${name} ${handle}`,
-      `🆔 ${userId}`,
-      `💰 مبلغ اشتراک: ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)} تومان`,
-    ].join("\n");
+    // A user holding a coupon is expected to have paid the discounted price; the
+    // flag rides on the approve button so approving redeems exactly one coupon.
+    const useCoupon = coupons > 0;
+    const discounted = useCoupon ? discountedPrice() : null;
+    const amountLine = !useCoupon
+      ? `💰 مبلغ اشتراک: ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)} تومان`
+      : discounted === null
+        ? `💰 مبلغ اشتراک: ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)} تومان، با کوپن ${formatNumber(percent)}٪ تخفیف`
+        : `💰 مبلغ اشتراک: ${formatNumber(discounted)} تومان (با کوپن ${formatNumber(percent)}٪ تخفیف؛ قیمت کامل ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)})`;
+    const caption = ["💳 رسید پرداخت جدید", `👤 ${name} ${handle}`, `🆔 ${userId}`, amountLine].join("\n");
 
     try {
       await bot.sendPhoto(config.ADMIN_CHAT_ID, largest.file_id, {
@@ -144,7 +177,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
         reply_markup: {
           inline_keyboard: [
             [
-              { text: "✅ تایید", callback_data: `pay:approve:${userId}` },
+              { text: "✅ تایید", callback_data: `pay:approve:${userId}${useCoupon ? ":d" : ""}` },
               { text: "❌ رد", callback_data: `pay:reject:${userId}` },
             ],
           ],
@@ -186,7 +219,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
   }
 
   /** Handles the admin's "✅ تایید" / "❌ رد" buttons (callback_data "pay:<action>:<userId>"). */
-  async function handlePaymentCallback(bot, callbackQuery, action, targetRaw) {
+  async function handlePaymentCallback(bot, callbackQuery, action, targetRaw, flag) {
     const adminChatId = String(config.ADMIN_CHAT_ID);
     const message = callbackQuery.message;
     const fromChatId = message && message.chat && message.chat.id;
@@ -213,15 +246,23 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
         return;
       }
 
+      // The receipt was forwarded with the coupon flag: redeem exactly one.
+      let couponNote = "";
+      let couponUsed = false;
+      if (flag === "d") {
+        couponUsed = await usage.redeemCoupon(targetUserId);
+        couponNote = couponUsed ? " و یک کوپن تخفیف استفاده شد" : " (کوپنی برای کسر نبود!)";
+      }
+
       const date = formatPersianDate(expiresAt);
       await bot.answerCallbackQuery(callbackQuery.id, { text: "✅ تایید شد" });
       await notifyUser(
         bot,
         adminChatId,
         targetUserId,
-        `🎉 پرداختت تایید شد و اشتراک کوله فعال شد!\n📅 اشتراکت تا ${date} (${formatNumber(config.SUBSCRIPTION_DAYS)} روز) اعتبار داره؛ تا اون موقع بدون محدودیت از همه‌ی امکانات استفاده کن.`
+        `🎉 پرداختت تایید شد و اشتراک کوله فعال شد!\n📅 اشتراکت تا ${date} (${formatNumber(config.SUBSCRIPTION_DAYS)} روز) اعتبار داره؛ تا اون موقع بدون محدودیت از همه‌ی امکانات استفاده کن.${couponUsed ? "\n🎟 کوپن تخفیفت روی این خرید استفاده شد." : ""}`
       );
-      await markAdminMessage(bot, message, `✅ تایید شد (اشتراک تا ${date})`);
+      await markAdminMessage(bot, message, `✅ تایید شد (اشتراک تا ${date})${couponNote}`);
       return;
     }
 

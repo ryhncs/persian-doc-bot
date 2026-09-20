@@ -300,14 +300,18 @@ test("REGRESSION: the admin's own account is limited like anyone else (no exempt
   assert.match(bot.calls.sendMessage[0].text, /سهمیه‌ی رایگان/);
 });
 
-test("the paywall frames the price as less than a metro ticket a day", async () => {
+test("the paywall states the price plainly, with no comparison, and mentions inviting friends", async () => {
   const { handlers, bot } = setup();
   await exhaustFreeTier(handlers, bot);
   await handlers.gatePremiumFeature(bot, USER, USER);
-  assert.match(bot.calls.sendMessage[0].text, /روزی کمتر از یه بلیط مترو/);
+  const text = bot.calls.sendMessage[0].text;
+  assert.match(text, /💰 قیمت: ۱۵۰٬۰۰۰ تومان در ماه \(۳۰ روز\)\n/);
+  assert.doesNotMatch(text, /مترو|بلیط|🚇/);
+  assert.match(text, /🎁 دوستانت رو دعوت کن/);
+  assert.match(text, /🎁 دعوت دوستان/);
 });
 
-test("💳 خرید اشتراک: shows price, metro framing and card, and lets the next photo reach the admin", async () => {
+test("💳 خرید اشتراک: shows the plain price, card and invite line, and lets the next photo reach the admin", async () => {
   const { handlers, bot, store } = setup();
 
   await handlers.sendSubscriptionInfo(bot, USER, USER);
@@ -315,7 +319,8 @@ test("💳 خرید اشتراک: shows price, metro framing and card, and lets 
   const { text, opts } = bot.calls.sendMessage[0];
   assert.equal(opts.parse_mode, "HTML");
   assert.match(text, /۱۵۰٬۰۰۰ تومان در ماه/);
-  assert.match(text, /روزی کمتر از یه بلیط مترو/);
+  assert.doesNotMatch(text, /مترو|بلیط/);
+  assert.match(text, /🎁 دوستانت رو دعوت کن/);
   assert.match(text, /<code>6037-9911-2233-4455<\/code>/);
   assert.match(text, /عکس/);
   assert.notEqual(store.rows.get(USER).payment_pending_at, null);

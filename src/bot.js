@@ -7,6 +7,7 @@ const { createSession } = require("./services/sessionStore");
 const { handlePaymentPhoto } = require("./handlers/payment");
 const { mainMenuKeyboard, isMenuLabel, handleMenuButton } = require("./handlers/menu");
 const { runTranslation } = require("./handlers/translate");
+const referral = require("./handlers/referral");
 const { handleStatusCommand, installDegradedAlert } = require("./handlers/admin");
 const { modes, MODES } = require("./services/userMode");
 const { usage } = require("./services/usage");
@@ -37,6 +38,12 @@ if (config.MONETIZATION_ENABLED) {
 } else {
   console.log("Monetization: disabled (no Supabase/payment env vars set) — all features unlimited.");
 }
+
+console.log(
+  config.TTS_ENABLED
+    ? `Audio summaries: enabled (Edge TTS, voice ${config.TTS_VOICE}; subscribers capped at ${config.SUBSCRIBER_AUDIO_PER_DAY}/day).`
+    : "Audio summaries: disabled (TTS_ENABLED=false)."
+);
 
 // A database that is unreachable or misconfigured makes the bot fail open
 // (everyone unlimited), so say so loudly at startup instead of staying quiet.
@@ -78,9 +85,28 @@ if (useWebhook) {
 
 installDegradedAlert(bot);
 
-bot.onText(/\/start/, (msg) => {
+// Invite links point at the bot's real username once Telegram tells us.
+if (typeof bot.getMe === "function") {
+  bot
+    .getMe()
+    .then((me) => referral.setBotUsername(me && me.username))
+    .catch((err) => console.warn("getMe failed; invite links use BOT_USERNAME:", err && err.message));
+}
+
+// "/start" and the deep link "/start ref_<code>" (someone invited this user).
+bot.onText(/^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/, (msg, match) => {
   modes.clear(msg.from.id);
-  bot.sendMessage(msg.chat.id, welcomeMessage(), { reply_markup: mainMenuKeyboard() });
+  bot
+    .sendMessage(msg.chat.id, welcomeMessage(), { reply_markup: mainMenuKeyboard() })
+    .then(() => referral.handleStartPayload(bot, msg, match && match[1]))
+    .catch((err) => console.error("Unhandled error in /start:", err));
+});
+
+bot.onText(/^\/invite(?:@\w+)?\s*$/, (msg) => {
+  modes.clear(msg.from.id);
+  referral.sendInviteInfo(bot, msg.chat.id, msg.from.id).catch((err) => {
+    console.error("Unhandled error in /invite:", err);
+  });
 });
 
 bot.onText(/^\/help(?:@\w+)?\s*$/, (msg) => {

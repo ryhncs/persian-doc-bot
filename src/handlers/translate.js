@@ -4,6 +4,7 @@ const { translateAndSimplify, translateToEnglish } = require("../services/transl
 const { GroqRateLimitError } = require("../services/groqClient");
 const { checkGlobalMinuteRate } = require("../services/rateLimiter");
 const { gatePremiumFeature, releasePremiumFeature } = require("./payment");
+const { afterDelivery } = require("./referral");
 
 const RATE_LIMIT_MESSAGE = "الان درخواست‌ها زیاده، چند لحظه دیگه دوباره امتحان کن 🙏";
 const NO_GROQ_KEY_MESSAGE = "قابلیت خلاصه‌سازی فعلاً روی این بات فعال نیست.";
@@ -54,6 +55,7 @@ async function runTranslation(bot, chatId, userId, text, action) {
       },
     });
     succeeded = true;
+    afterDelivery(bot, userId).catch(() => {});
   } catch (err) {
     console.error("Translate/simplify failed:", {
       chatId,

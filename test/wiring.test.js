@@ -166,13 +166,13 @@ test.before(async () => {
 });
 
 // --- /start, /help ----------------------------------------------------------
-test("/start sends the exact welcome text with the persistent five-button menu", async () => {
+test("/start sends the exact welcome text with the persistent six-button menu", async () => {
   say(101, "/start");
   await waitFor(() => countTo(101) === 1, "welcome");
   const msg = lastTo(101);
   assert.equal(msg.text, WELCOME_TEXT);
   assert.equal(msg.opts.reply_markup.is_persistent, true);
-  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE]);
+  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE]);
 });
 
 test("/help repeats the menu keyboard", async () => {
@@ -194,7 +194,7 @@ test("a plain text message still becomes a Word file, with the two translate but
 test("menu labels are never converted to Word files", async () => {
   const before = bot.documents.length;
   for (const label of Object.values(MENU)) say(112, label);
-  await waitFor(() => countTo(112) === 5, "five menu replies");
+  await waitFor(() => countTo(112) === 6, "six menu replies");
   assert.equal(bot.documents.length, before);
 });
 
@@ -288,7 +288,8 @@ test("3 free requests, then the paywall (and no 4th Groq call)", async () => {
   assert.equal(paywall.opts.parse_mode, "HTML");
   assert.match(paywall.text, /سهمیه‌ی رایگان/);
   assert.match(paywall.text, /۱۲۰٬۰۰۰ تومان/);
-  assert.match(paywall.text, /روزی کمتر از یه بلیط مترو/);
+  assert.doesNotMatch(paywall.text, /مترو|بلیط/);
+  assert.match(paywall.text, /🎁 دوستانت رو دعوت کن/);
   assert.match(paywall.text, /<code>6037-9911-2233-4455<\/code>/);
   assert.equal(groqCalls.length, groqBefore + 3, "the blocked request never reached Groq");
 });
@@ -355,12 +356,13 @@ test("admin rejects: user told, and a corrected receipt still reaches the admin"
   await waitFor(() => bot.photos.length === photosBefore + 1, "resent receipt forwarded");
 });
 
-test("💳 shows price, the metro framing and card; the next photo is a receipt", async () => {
+test("💳 shows the plain price, card and invite line; the next photo is a receipt", async () => {
   say(181, MENU.SUBSCRIBE);
   await waitFor(() => countTo(181) === 1, "screen");
   const screen = lastTo(181);
   assert.match(screen.text, /۱۲۰٬۰۰۰ تومان در ماه/);
-  assert.match(screen.text, /روزی کمتر از یه بلیط مترو/);
+  assert.doesNotMatch(screen.text, /مترو|بلیط/);
+  assert.match(screen.text, /🎁 دوستانت رو دعوت کن/);
   assert.match(screen.text, /<code>6037-9911-2233-4455<\/code>/);
 
   const photosBefore = bot.photos.length;

@@ -12,6 +12,15 @@ const DEFAULTS = () => ({
   week_reset_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
   subscription_expires_at: null,
   payment_pending_at: null,
+  first_action_at: null,
+  referral_code: null,
+  referred_by: null,
+  referral_qualified_at: null,
+  bonus_requests: 0,
+  successful_referrals: 0,
+  referral_progress: 0,
+  coupons_available: 0,
+  coupons_redeemed: 0,
 });
 
 function createPostgrestEmulator() {
@@ -22,6 +31,11 @@ function createPostgrestEmulator() {
     const dot = expression.indexOf(".");
     const op = expression.slice(0, dot);
     const raw = expression.slice(dot + 1);
+    if (op === "is") {
+      if (raw !== "null") throw new Error("emulator: only is.null is supported");
+      return row[column] === null || row[column] === undefined;
+    }
+    if (column === "referral_code") return op === "eq" && row[column] === raw;
     const isTime = column === "week_reset_at" || column.endsWith("_at");
     const left = isTime ? Date.parse(row[column]) : Number(row[column]);
     const right = isTime ? Date.parse(raw) : Number(raw);
@@ -86,6 +100,10 @@ function createPostgrestEmulator() {
 
     if (method === "PATCH") {
       const matched = filtered(url);
+      // referral_code has a unique index in the real schema.
+      if (body.referral_code && [...rows.values()].some((r) => r.referral_code === body.referral_code)) {
+        return respond(409, { code: "23505", message: 'duplicate key value violates unique constraint "users_referral_code_key"' });
+      }
       for (const row of matched) Object.assign(rows.get(row.telegram_user_id), body);
       return respond(200, matched.map((r) => ({ ...rows.get(r.telegram_user_id) })));
     }

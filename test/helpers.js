@@ -16,6 +16,15 @@ function createFakeStore({ failWith, pingWarnings = [] } = {}) {
     week_reset_at: new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(),
     subscription_expires_at: null,
     payment_pending_at: null,
+    first_action_at: null,
+    referral_code: null,
+    referred_by: null,
+    referral_qualified_at: null,
+    bonus_requests: 0,
+    successful_referrals: 0,
+    referral_progress: 0,
+    coupons_available: 0,
+    coupons_redeemed: 0,
   });
 
   return {
@@ -31,7 +40,7 @@ function createFakeStore({ failWith, pingWarnings = [] } = {}) {
     async createUser(row) {
       await guard();
       if (rows.has(row.telegram_user_id)) return null;
-      const created = { subscription_expires_at: null, payment_pending_at: null, ...row };
+      const created = { ...defaults(row.telegram_user_id, Date.now()), ...row };
       rows.set(row.telegram_user_id, created);
       return copy(created);
     },
@@ -56,6 +65,29 @@ function createFakeStore({ failWith, pingWarnings = [] } = {}) {
       row.weekly_request_count = 1;
       row.week_reset_at = newResetAtIso;
       return copy(row);
+    },
+    async tryUpdate(id, expected, fields) {
+      await guard();
+      const row = rows.get(id);
+      if (!row) return null;
+      for (const [column, value] of Object.entries(expected)) {
+        const actual = row[column] === undefined ? null : row[column];
+        if (actual !== value) return null;
+      }
+      if (fields.referral_code) {
+        for (const other of rows.values()) {
+          if (other !== row && other.referral_code === fields.referral_code) {
+            throw new Error("Supabase PATCH failed (409): duplicate key");
+          }
+        }
+      }
+      Object.assign(row, fields);
+      return copy(row);
+    },
+    async getUserByReferralCode(code) {
+      await guard();
+      for (const row of rows.values()) if (row.referral_code === code) return copy(row);
+      return null;
     },
     async tryDecrement(id, expectedCount, nowIso) {
       await guard();

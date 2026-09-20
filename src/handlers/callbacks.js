@@ -5,6 +5,7 @@ const { compressAndSendPdf } = require("./compress");
 const { runPdfSummary } = require("./pdfSummary");
 const { runTranslation } = require("./translate");
 const { handlePaymentCallback } = require("./payment");
+const { runAudioVersion } = require("./audioVersion");
 
 const NOT_FOR_YOU = "این دکمه برای فایل/پیام صوتی خودت نیست.";
 const EXPIRED = "این نشست منقضی شده. فایل یا پیام صوتی رو دوباره بفرست.";
@@ -36,6 +37,12 @@ async function handleSummarySessionCallback(bot, callbackQuery, action, sessionI
   const problem = checkOwnedSession(session, callbackQuery);
   if (problem) {
     await answerWithProblem(bot, callbackQuery, problem);
+    return;
+  }
+
+  if (action === "tts") {
+    // Billable, refunded on failure, and runs on its own error handling.
+    await runAudioVersion(bot, callbackQuery, session);
     return;
   }
 
@@ -171,8 +178,8 @@ async function handleCallbackQuery(bot, callbackQuery) {
 
   // Admin's "✅ تایید" / "❌ رد" buttons on a forwarded payment receipt.
   if (data.startsWith("pay:")) {
-    const [, action, targetUserId] = data.split(":");
-    await handlePaymentCallback(bot, callbackQuery, action, targetUserId);
+    const [, action, targetUserId, flag] = data.split(":");
+    await handlePaymentCallback(bot, callbackQuery, action, targetUserId, flag);
     return;
   }
 }

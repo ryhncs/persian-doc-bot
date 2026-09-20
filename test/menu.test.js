@@ -30,12 +30,13 @@ test("menu labels are exactly the requested wording (ZWNJ included)", () => {
   assert.equal(MENU.SUBSCRIBE, "💳 خرید اشتراک");
 });
 
-test("the keyboard is a persistent reply keyboard with the five buttons, not inline buttons", () => {
+test("the keyboard is a persistent reply keyboard with the six buttons, not inline buttons", () => {
   const kb = mainMenuKeyboard();
   assert.equal(kb.is_persistent, true);
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.inline_keyboard, undefined);
-  assert.deepEqual(kb.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE]);
+  assert.deepEqual(kb.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE]);
+  assert.equal(MENU.INVITE, "🎁 دعوت دوستان");
 });
 
 test("isMenuLabel recognizes the labels (ignoring stray whitespace) and nothing else", () => {

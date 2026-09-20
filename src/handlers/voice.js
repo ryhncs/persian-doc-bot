@@ -6,6 +6,8 @@ const { createSession } = require("../services/sessionStore");
 const { checkAndRecordDailyUser, checkGlobalMinuteRate } = require("../services/rateLimiter");
 const { GroqRateLimitError } = require("../services/groqClient");
 const { gatePremiumFeature, releasePremiumFeature } = require("./payment");
+const { audioButtonRows } = require("./audioVersion");
+const { afterDelivery } = require("./referral");
 
 const PROCESSING_MESSAGE = "⏳ در حال پردازش پیام صوتی... چند لحظه صبر کن.";
 const DAILY_LIMIT_MESSAGE = "امروز به سقف تعداد پیام‌های صوتی رسیدی. فردا دوباره امتحان کن.";
@@ -116,10 +118,12 @@ async function handleVoiceMessage(bot, msg) {
             { text: "متن کامل", callback_data: `vs:full:${sessionId}` },
             { text: "خروجی Word", callback_data: `vs:docx:${sessionId}` },
           ],
+          ...audioButtonRows(sessionId),
         ],
       },
     });
     succeeded = true;
+    afterDelivery(bot, userId).catch(() => {});
   } catch (err) {
     console.error("Voice message processing failed:", {
       chatId,

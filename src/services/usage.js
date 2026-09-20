@@ -10,6 +10,7 @@
 
 const config = require("../config");
 const { createSupabaseStore } = require("./supabaseStore");
+const { createReferralService } = require("./referrals");
 const { DAY_MS } = require("../utils/format");
 
 function createUsageService({
@@ -17,10 +18,12 @@ function createUsageService({
   limit,
   windowMs = 7 * DAY_MS,
   pendingTtlMs = 24 * 60 * 60 * 1000,
+  referral = {}, // { bonusRequests, bonusCap, perCoupon }: see referrals.js
   now = () => Date.now(),
   log = console,
 }) {
   const enabled = Boolean(store);
+  const referrals = createReferralService({ store, now, log, ...referral });
   let degradedHandler = null;
   // Told about database failures so they can be surfaced (e.g. DM the admin);
   // without this a broken database looks exactly like "everyone is unlimited".
@@ -62,10 +65,25 @@ function createUsageService({
     return created || store.getUser(userId);
   }
 
+  // Weekly allowance used up: spend one bonus request (from referrals) if there
+  // is one. Conditional on the weekly count too, so it can't be spent by a
+  // request that raced with a refund. Null if none was available.
+  async function tryUseBonus(userId, user) {
+    const bonus = Number(user.bonus_requests) || 0;
+    if (bonus <= 0) return null;
+    const row = await store.tryUpdate(
+      userId,
+      { bonus_requests: bonus, weekly_request_count: user.weekly_request_count },
+      { bonus_requests: bonus - 1 }
+    );
+    return row ? { allowed: true, counted: true, source: "bonus", used: user.weekly_request_count, limit } : null;
+  }
+
   /**
    * Call before doing a premium feature. If `allowed`, the request has already
    * been counted (when `counted`) — pass the result to refund() if the feature
-   * then fails to deliver.
+   * then fails to deliver. A request is paid from the weekly allowance first,
+   * then from bonus requests (`source` says which).
    */
   async function checkAndConsume(userId) {
     if (!enabled) return { allowed: true, counted: false, disabled: true };
@@ -81,16 +99,26 @@ function createUsageService({
         const resetAt = Date.parse(user.week_reset_at);
 
         if (resetAt <= t) {
-          if (limit < 1) return { allowed: false, limit, resetAt: t + windowMs };
+          if (limit < 1) {
+            const bonus = await tryUseBonus(userId, user);
+            if (bonus) return bonus;
+            if ((Number(user.bonus_requests) || 0) > 0) continue; // lost a race for it
+            return { allowed: false, limit, resetAt: t + windowMs };
+          }
           const row = await store.tryResetWindow(userId, iso(t), iso(t + windowMs));
-          if (row) return { allowed: true, counted: true, used: 1, limit };
+          if (row) return { allowed: true, counted: true, source: "weekly", used: 1, limit };
           continue;
         }
 
-        if (user.weekly_request_count >= limit) return { allowed: false, limit, resetAt };
+        if (user.weekly_request_count >= limit) {
+          const bonus = await tryUseBonus(userId, user);
+          if (bonus) return bonus;
+          if ((Number(user.bonus_requests) || 0) > 0) continue; // lost a race for it
+          return { allowed: false, limit, resetAt };
+        }
 
         const row = await store.tryIncrement(userId, user.weekly_request_count, iso(t));
-        if (row) return { allowed: true, counted: true, used: row.weekly_request_count, limit };
+        if (row) return { allowed: true, counted: true, source: "weekly", used: row.weekly_request_count, limit };
       }
 
       log.warn(`[usage] gave up after ${maxAttempts} contended attempts for user ${userId}; allowing uncounted`);
@@ -106,6 +134,15 @@ function createUsageService({
   async function refund(userId, gate) {
     if (!enabled || !gate || !gate.counted) return;
     try {
+      if (gate.source === "bonus") {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const user = await store.getUser(userId);
+          if (!user) return;
+          const bonus = Number(user.bonus_requests) || 0;
+          if (await store.tryUpdate(userId, { bonus_requests: bonus }, { bonus_requests: bonus + 1 })) return;
+        }
+        return;
+      }
       for (let attempt = 0; attempt < 3; attempt++) {
         const t = now();
         const user = await store.getUser(userId);
@@ -136,7 +173,7 @@ function createUsageService({
    * expected; subscribedUntil is the expiry in ms while subscribed, else null.
    */
   async function getPaymentState(userId) {
-    const none = { pending: false, subscribed: false, subscribedUntil: null };
+    const none = { pending: false, subscribed: false, subscribedUntil: null, coupons: 0 };
     if (!enabled) return none;
     try {
       const user = await store.getUser(userId);
@@ -147,7 +184,12 @@ function createUsageService({
         !subscribed &&
         ((Boolean(user.payment_pending_at) && t - Date.parse(user.payment_pending_at) < pendingTtlMs) ||
           localPendingFresh(userId, t));
-      return { pending, subscribed, subscribedUntil: subscribed ? Date.parse(user.subscription_expires_at) : null };
+      return {
+        pending,
+        subscribed,
+        subscribedUntil: subscribed ? Date.parse(user.subscription_expires_at) : null,
+        coupons: Number(user.coupons_available) || 0,
+      };
     } catch (err) {
       log.error(`[usage] could not read payment state for user ${userId}:`, err && err.message);
       return { ...none, pending: localPendingFresh(userId, now()) };
@@ -213,6 +255,8 @@ function createUsageService({
     refund,
     markPaymentPending,
     getPaymentState,
+    referrals,
+    redeemCoupon: referrals.redeemCoupon,
     activateSubscription,
     rejectPayment,
     probe,
@@ -231,6 +275,11 @@ const usage = createUsageService({
   store,
   limit: config.FREE_REQUESTS_PER_WEEK,
   pendingTtlMs: config.PENDING_PAYMENT_TTL_HOURS * 60 * 60 * 1000,
+  referral: {
+    bonusRequests: config.REFERRAL_BONUS_REQUESTS,
+    bonusCap: config.REFERRAL_BONUS_CAP,
+    perCoupon: config.REFERRALS_PER_COUPON,
+  },
 });
 
 module.exports = { createUsageService, usage };
