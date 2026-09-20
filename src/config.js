@@ -54,19 +54,27 @@ const PDF_COMPRESS_PRESET = process.env.PDF_COMPRESS_PRESET || "/ebook";
 const GLOBAL_WHISPER_PER_MINUTE = 18;
 const GLOBAL_LLM_PER_MINUTE = 28;
 
-// Token-budget guard for the PDF summarization flow (student assistant
-// feature). NOT a context-window guess — empirically measured against a
-// real 413 from Groq: openai/gpt-oss-120b on this account's on_demand tier
-// caps at 8000 tokens/minute total (prompt + completion), and two real
-// documents (15792 and 20441 extracted chars) were rejected requesting
-// 8380/10909 tokens — a measured ~1.88 chars/token for this model on this
-// kind of content. 8000 chars (~4250 tokens) leaves headroom for the
-// system prompt (~500 tokens) and a long structured completion (~800+
-// tokens), plus margin for estimation error and other concurrent calls to
-// the same model (e.g. voice summaries) sharing the same per-minute quota.
-// Raise via env var if/when this account moves to a higher-TPM tier.
+// Groq's free tier caps tokens per minute (TPM) per model, and a single request
+// larger than that is rejected outright (413). The context window (128K) is
+// not the constraint; the per-minute budget is. Measured on this account:
+// openai/gpt-oss-120b rejected a 15,792-char document that needed 8,380
+// tokens against an 8,000 TPM cap. The PDF summarizer therefore splits long
+// documents into chunks that each fit well inside the budget, summarizes them
+// one at a time paced to stay under this many tokens per minute (see
+// services/longSummarize.js), then combines the partial summaries.
+const GROQ_TPM_LIMIT = parseInt(process.env.GROQ_TPM_LIMIT, 10) || 6000;
+
+// Conservative characters-per-token estimate for mixed Persian/English text
+// (measured ~1.88 on English-heavy technical text; Persian tokenizes worse).
+const CHARS_PER_TOKEN_ESTIMATE = 1.6;
+
+// Upper bound on the text of one PDF to summarize. Nothing under this is
+// truncated, but the time is bounded by the TPM budget: roughly one minute per
+// ~5,000 characters (60,000 chars is around 10 to 12 minutes), and the whole
+// bot shares Groq's daily token allowance. Longer documents get a friendly
+// "send it in parts" reply.
 const MAX_DOCUMENT_CHARS_FOR_SUMMARY =
-  parseInt(process.env.MAX_DOCUMENT_CHARS_FOR_SUMMARY, 10) || 8000;
+  parseInt(process.env.MAX_DOCUMENT_CHARS_FOR_SUMMARY, 10) || 40000;
 
 // --- Monetization: weekly free-tier limit + manual card-to-card subscription.
 // Per-user state lives in Supabase (see supabase/schema.sql). Enforcement is
@@ -115,6 +123,8 @@ module.exports = {
   GLOBAL_WHISPER_PER_MINUTE,
   GLOBAL_LLM_PER_MINUTE,
   MAX_DOCUMENT_CHARS_FOR_SUMMARY,
+  GROQ_TPM_LIMIT,
+  CHARS_PER_TOKEN_ESTIMATE,
   SUPABASE_URL,
   SUPABASE_KEY,
   SUBSCRIPTION_PRICE_TOMAN,

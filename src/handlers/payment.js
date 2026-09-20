@@ -23,16 +23,34 @@ function parseUserId(raw) {
 function createPaymentHandlers({ usage, config, now = () => Date.now(), log = console }) {
   const lastForwardAt = new Map(); // userId -> ms, to stop receipt spam to the admin
 
+  // Price, card and receipt instructions: shared by the out-of-quota paywall
+  // and the "💳 خرید اشتراک" menu button.
+  function paymentLines() {
+    return [
+      `💰 قیمت: ${escapeHtml(formatNumber(config.SUBSCRIPTION_PRICE_TOMAN))} تومان در ماه (${formatNumber(config.SUBSCRIPTION_DAYS)} روز)، یعنی روزی کمتر از یه بلیط مترو 🚇`,
+      `💳 شماره کارت: <code>${escapeHtml(config.CARD_NUMBER)}</code>`,
+      "",
+      "بعد از کارت‌به‌کارت، یه اسکرین‌شات از رسید پرداخت رو همین‌جا به‌صورت عکس برام بفرست. بعد از بررسی و تایید، اشتراکت فعال می‌شه ✅",
+    ];
+  }
+
+  function subscribeInfoText() {
+    return [
+      "💳 اشتراک ماهانه‌ی کوله",
+      "",
+      "با اشتراک، بدون محدودیت پیام صوتی و جزوه PDF رو خلاصه می‌کنی و متن‌ها رو ترجمه و ساده می‌کنی.",
+      "",
+      ...paymentLines(),
+    ].join("\n");
+  }
+
   function paywallText(gate) {
     const lines = [
       `🔒 سهمیه‌ی رایگان این هفته‌ات (${formatNumber(gate.limit)} درخواست) تموم شد.`,
       "",
       "برای استفاده‌ی نامحدود از خلاصه‌سازی صوت و PDF و ترجمه، اشتراک ماهانه‌ی کوله رو بگیر:",
       "",
-      `💰 قیمت: ${escapeHtml(formatNumber(config.SUBSCRIPTION_PRICE_TOMAN))} تومان (${formatNumber(config.SUBSCRIPTION_DAYS)} روز)`,
-      `💳 شماره کارت: <code>${escapeHtml(config.CARD_NUMBER)}</code>`,
-      "",
-      "بعد از کارت‌به‌کارت، یه اسکرین‌شات از رسید پرداخت رو همین‌جا به‌صورت عکس برام بفرست. بعد از بررسی و تایید، اشتراکت فعال می‌شه ✅",
+      ...paymentLines(),
     ];
 
     if (gate.resetAt) {
@@ -49,6 +67,30 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
     // From here on a photo from this user is treated as a payment receipt.
     await usage.markPaymentPending(userId);
     await bot.sendMessage(chatId, paywallText(gate), { parse_mode: "HTML" });
+  }
+
+  /**
+   * The "💳 خرید اشتراک" menu button: shows price and card, and (like the
+   * paywall) starts the window in which a photo from this user is treated as a
+   * payment receipt. Subscribers just see when their subscription ends.
+   */
+  async function sendSubscriptionInfo(bot, chatId, userId) {
+    if (!usage.enabled) {
+      await bot.sendMessage(chatId, "الان همه‌ی امکانات رایگانه و نیازی به اشتراک نیست 😊");
+      return;
+    }
+
+    const { subscribed, subscribedUntil } = await usage.getPaymentState(userId);
+    if (subscribed) {
+      await bot.sendMessage(
+        chatId,
+        `✅ اشتراکت فعاله و تا ${formatPersianDate(subscribedUntil)} اعتبار داره. تا اون موقع بدون محدودیت از همه‌ی امکانات استفاده کن 🎒`
+      );
+      return;
+    }
+
+    await usage.markPaymentPending(userId);
+    await bot.sendMessage(chatId, subscribeInfoText(), { parse_mode: "HTML" });
   }
 
   /**
@@ -87,7 +129,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
     }
 
     const largest = msg.photo[msg.photo.length - 1];
-    const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "—";
+    const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "-";
     const handle = msg.from.username ? `@${msg.from.username}` : "(بدون یوزرنیم)";
     const caption = [
       "💳 رسید پرداخت جدید",
@@ -207,6 +249,7 @@ function createPaymentHandlers({ usage, config, now = () => Date.now(), log = co
   return {
     gatePremiumFeature,
     releasePremiumFeature,
+    sendSubscriptionInfo,
     handlePaymentPhoto,
     handlePaymentCallback,
   };

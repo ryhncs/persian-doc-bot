@@ -1,35 +1,35 @@
 const config = require("./config");
 const { formatNumber } = require("./utils/format");
 
-const FEATURES = [
-  "🎙 پیام صوتی بفرست (یا فوروارد کن) تا متنش رو پیاده و خلاصه کنم.",
-  "📄 پی‌دی‌اف بفرست تا خلاصه‌ش کنم یا حجمش رو کم کنم.",
-  "📝 هر متنی بفرستی (کپی‌شده از واتساپ، وردپرس، هر جا)، یه فایل Word مرتب و راست‌به‌چپ برات می‌سازم؛ زیرش هم دکمه‌ی «ترجمه و ساده‌سازی (فارسی)» و «ترجمه به انگلیسی» هست.",
-  "🖼 عکس بفرست تا حجمش رو کم کنم.",
-];
+// Shown on /start, together with the persistent menu. Wording is fixed by the
+// product owner; the free-request count and price are part of the copy, so if
+// FREE_REQUESTS_PER_WEEK or SUBSCRIPTION_PRICE_TOMAN change, update it here.
+const WELCOME_TEXT = [
+  "سلام! به کوله خوش اومدی 🎒",
+  "من اینجام تا تو درس خوندنت کمکت کنم: می‌تونم پیام صوتیت رو خلاصه کنم، جزوه‌ی PDF رو براوت خلاصه کنم، یه متن رو ترجمه و ساده کنم، یا حجم عکس و PDF رو کوچیک کنم.",
+  "هر هفته ۳ تا درخواست رایگان داری. برای استفاده‌ی بیشتر هم اشتراک ماهانه داریم، فقط ۱۲۰ هزار تومن، یعنی روزی کمتر از یه بلیط مترو.",
+  "از منوی پایین یکی از گزینه‌ها رو انتخاب کن و شروع کن.",
+].join("\n");
+
+function welcomeMessage() {
+  return WELCOME_TEXT;
+}
 
 function limitsParagraph() {
   if (!config.MONETIZATION_ENABLED) return null;
   return `🎁 هر هفته ${formatNumber(config.FREE_REQUESTS_PER_WEEK)} درخواست رایگان برای خلاصه‌سازی صوت و PDF و ترجمه داری. ساخت Word و کم کردن حجم فایل همیشه رایگانه. برای استفاده‌ی نامحدود هم می‌تونی اشتراک ماهانه بگیری.`;
 }
 
-function welcomeMessage() {
-  return [
-    "سلام! من «کوله» هستم 🎒 دستیار درسی‌ت.",
-    "",
-    "اینا رو برات انجام می‌دم:",
-    ...FEATURES,
-    ...(limitsParagraph() ? ["", limitsParagraph()] : []),
-    "",
-    "کافیه چیزی که می‌خوای رو بفرستی — چیز دیگه‌ای لازم نیست. راهنمای بیشتر: /help",
-  ].join("\n");
-}
-
 function helpMessage() {
   const lines = [
     "راهنمای «کوله» 🎒",
     "",
-    ...FEATURES,
+    "همه‌چیز از منوی پایین شروع می‌شه:",
+    "🎙 خلاصه پیام صوتی: پیام صوتیت رو بفرست (یا فوروارد کن) تا متنش رو پیاده و خلاصه کنم.",
+    "📄 خلاصه جزوه PDF: PDF متن‌دار رو بفرست تا خلاصه‌ش کنم.",
+    "🌐 ترجمه و ساده‌سازی متن: متنت رو بفرست تا ترجمه و ساده‌ش کنم.",
+    "🗜 فشرده‌سازی عکس و PDF: عکس یا PDF بفرست تا حجمش کم بشه.",
+    "📝 هر متنی هم که بفرستی، یه فایل Word مرتب و راست‌به‌چپ برات می‌سازم.",
     "",
     "نکته‌ها:",
     `• پیام صوتی باید بین ${formatNumber(config.MIN_VOICE_DURATION_SECONDS)} ثانیه تا ${formatNumber(Math.round(config.MAX_VOICE_DURATION_SECONDS / 60))} دقیقه باشه.`,
@@ -42,7 +42,7 @@ function helpMessage() {
     lines.push(
       "",
       limits,
-      `💳 اشتراک ماهانه: ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)} تومان — وقتی سهمیه‌ت تموم شد، ربات خودش راه پرداخت رو بهت نشون می‌ده.`
+      `💳 اشتراک ماهانه: ${formatNumber(config.SUBSCRIPTION_PRICE_TOMAN)} تومان. از دکمه‌ی «💳 خرید اشتراک» راه پرداخت رو ببین.`
     );
     if (config.ADMIN_CONTACT) lines.push(`📩 پشتیبانی: ${config.ADMIN_CONTACT}`);
   }
@@ -50,4 +50,4 @@ function helpMessage() {
   return lines.join("\n");
 }
 
-module.exports = { welcomeMessage, helpMessage };
+module.exports = { WELCOME_TEXT, welcomeMessage, helpMessage };

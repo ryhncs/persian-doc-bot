@@ -289,3 +289,58 @@ test("with monetization disabled nothing is gated and photos are never treated a
   assert.equal(await handlers.handlePaymentPhoto(bot, photoMsg()), false);
   assert.equal(bot.calls.sendMessage.length, 0);
 });
+
+test("REGRESSION: the admin's own account is limited like anyone else (no exemption)", async () => {
+  const ADMIN_USER = Number(ADMIN);
+  const { handlers, bot } = setup();
+
+  for (let i = 0; i < 3; i++) assert.ok(await handlers.gatePremiumFeature(bot, ADMIN_USER, ADMIN_USER));
+  assert.equal(await handlers.gatePremiumFeature(bot, ADMIN_USER, ADMIN_USER), null);
+  assert.equal(bot.calls.sendMessage.length, 1);
+  assert.match(bot.calls.sendMessage[0].text, /سهمیه‌ی رایگان/);
+});
+
+test("the paywall frames the price as less than a metro ticket a day", async () => {
+  const { handlers, bot } = setup();
+  await exhaustFreeTier(handlers, bot);
+  await handlers.gatePremiumFeature(bot, USER, USER);
+  assert.match(bot.calls.sendMessage[0].text, /روزی کمتر از یه بلیط مترو/);
+});
+
+test("💳 خرید اشتراک: shows price, metro framing and card, and lets the next photo reach the admin", async () => {
+  const { handlers, bot, store } = setup();
+
+  await handlers.sendSubscriptionInfo(bot, USER, USER);
+
+  const { text, opts } = bot.calls.sendMessage[0];
+  assert.equal(opts.parse_mode, "HTML");
+  assert.match(text, /۱۵۰٬۰۰۰ تومان در ماه/);
+  assert.match(text, /روزی کمتر از یه بلیط مترو/);
+  assert.match(text, /<code>6037-9911-2233-4455<\/code>/);
+  assert.match(text, /عکس/);
+  assert.notEqual(store.rows.get(USER).payment_pending_at, null);
+
+  assert.equal(await handlers.handlePaymentPhoto(bot, photoMsg()), true);
+  assert.equal(bot.calls.sendPhoto.length, 1);
+});
+
+test("💳 خرید اشتراک: a subscriber sees when the subscription ends instead of payment details", async () => {
+  const { handlers, bot, usage, clock } = setup();
+  const expiresAt = await usage.activateSubscription(USER, 30);
+
+  await handlers.sendSubscriptionInfo(bot, USER, USER);
+
+  const { text } = bot.calls.sendMessage[0];
+  assert.ok(text.includes(formatPersianDate(expiresAt)));
+  assert.doesNotMatch(text, /شماره کارت/);
+  assert.equal(clock(), clock()); // (clock untouched)
+});
+
+test("💳 خرید اشتراک with monetization disabled says everything is free", async () => {
+  const usage = createUsageService({ store: null, limit: 3, log: silentLog });
+  const handlers = createPaymentHandlers({ usage, config: { ...config, MONETIZATION_ENABLED: false }, log: silentLog });
+  const bot = createMockBot();
+
+  await handlers.sendSubscriptionInfo(bot, USER, USER);
+  assert.match(bot.calls.sendMessage[0].text, /رایگانه/);
+});

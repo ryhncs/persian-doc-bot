@@ -4,6 +4,11 @@ Kooleh ("backpack") is a friendly Persian-language student-assistant Telegram
 bot. All user-facing text is Persian, and it copes with mixed Persian/English
 input.
 
+Everything starts from a persistent menu under the message box (shown after
+`/start`): **🎙 خلاصه پیام صوتی**, **📄 خلاصه جزوه PDF**, **🌐 ترجمه و
+ساده‌سازی متن**, **🗜 فشرده‌سازی عکس و PDF** and **💳 خرید اشتراک**. See
+[The menu](#the-menu).
+
 1. **Word export** — send any messy pasted text, get back a clean, RTL,
    properly fonted `.docx` file. Always free.
 2. **Voice summary** — send or forward a voice message, get back a Persian
@@ -12,7 +17,8 @@ input.
 3. **PDF summarization** — send a PDF and choose "خلاصه‌سازی": the bot
    extracts its text and returns a structured Persian summary (key points as
    bullet lines), with the same "متن کامل" / "خروجی Word" buttons as the
-   voice flow.
+   voice flow. Long PDFs are summarized in chunks and merged, see
+   [Long PDFs](#long-pdfs).
 4. **Translate & simplify** — every text message converted to a `.docx`
    (feature 1) also gets two buttons: "🌐 ترجمه و ساده‌سازی (فارسی)"
    translates non-Persian text to fluent Persian, then rewrites it
@@ -64,10 +70,11 @@ text).
 | `MIN_VOICE_DURATION_SECONDS`   | no       | `4`                        | Voice messages shorter than this are rejected with a Persian message — Whisper is unreliable on very short clips regardless of prompt/language/temperature tuning. |
 | `DAILY_VOICE_LIMIT_PER_USER`   | no       | `20`                       | Per-user daily cap on voice messages processed (in-memory, resets at UTC midnight). |
 | `PDF_COMPRESS_PRESET`          | no       | `/ebook`                  | Ghostscript `PDFSETTINGS` preset for PDF compression. Other options: `/screen` (smallest, lowest quality), `/printer`, `/prepress` (largest, closest to original). |
-| `MAX_DOCUMENT_CHARS_FOR_SUMMARY` | no     | `8000`                    | Character-count cap on extracted PDF text before summarization is attempted — sized to stay under Groq's measured per-minute token cap for `SUMMARY_MODEL` on this account (see `config.js`). Longer documents get a friendly "too long, send a shorter excerpt" reply instead of a failed summary. |
+| `MAX_DOCUMENT_CHARS_FOR_SUMMARY` | no     | `40000`                   | Upper bound on the extracted text of one PDF to summarize. Nothing under it is truncated (long PDFs are chunked, see [Long PDFs](#long-pdfs)), but it bounds the time: roughly one minute per 5,000 characters. Longer documents get a friendly "send it in parts" reply. If you set an older value (e.g. `8000`) in your host's env, it caps summaries at that. |
+| `GROQ_TPM_LIMIT`              | no       | `6000`                    | Tokens-per-minute your Groq plan allows for `SUMMARY_MODEL`. Chunk sizes and request pacing are derived from it. Raise it on a higher tier for faster long-PDF summaries. |
 | `SUPABASE_URL`                 | for limits | —                     | Supabase project URL. See [Free tier & subscriptions](#free-tier--subscriptions). |
 | `SUPABASE_KEY`                 | for limits | —                     | Supabase **service_role** key (server-side only — never expose it). |
-| `SUBSCRIPTION_PRICE_TOMAN`     | for limits | —                     | Monthly price shown on the paywall, digits only (e.g. `150000`). |
+| `SUBSCRIPTION_PRICE_TOMAN`     | for limits | —                     | Monthly price shown on the paywall, digits only (e.g. `120000`). |
 | `CARD_NUMBER`                  | for limits | —                     | Card number users transfer to, shown on the paywall. |
 | `ADMIN_CHAT_ID`                | for limits | —                     | Telegram user id (or group chat id) that receives payment receipts with ✅/❌ buttons. The admin must press Start on the bot once. |
 | `ADMIN_CONTACT`                | no       | unset                      | Shown to users whose payment was rejected, e.g. `@your_username`. |
@@ -110,7 +117,11 @@ src/
     voice.js               Voice/audio message → transcript → summary → reply
     callbacks.js            "متن کامل" / "خروجی Word" (+ PDF-choice, + translate) button handling
     compress.js              Photo/document message → compressed file → reply
+    menu.js                   The persistent menu: labels, keyboard, what each button does
+    translate.js               Translate/simplify flow (inline buttons and the menu button)
+    pdfSummary.js              PDF summary flow with live progress (inline buttons and the menu button)
     payment.js                Paywall, receipt-photo forwarding to the admin, ✅/❌ approval buttons
+    admin.js                   Admin-only /status and the "database is failing" alert
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -124,6 +135,10 @@ src/
     pdfCompress.js                    PDF → smaller PDF via Ghostscript (`gs` binary)
     pdfText.js                        PDF → extracted plain text via pdf-parse (no native binary)
     usage.js                           Free weekly quota + subscription policy (fails open)
+    userMode.js                        Per-user "what is my next message for?" set by menu taps
+    longSummarize.js                   Map-reduce PDF summary paced under the Groq tokens-per-minute cap
+    tpmLimiter.js                      Sliding-window tokens-per-minute limiter
+    textChunker.js                     Splits long text into chunks on line/sentence boundaries, losing nothing
     supabaseStore.js                    Supabase (PostgREST) client for the `users` table, plain fetch
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
@@ -152,6 +167,55 @@ tokens/day on Llama. `src/services/rateLimiter.js` implements:
 Both are in-memory Maps — fine for a single-instance MVP. The file has a
 comment showing the Redis key scheme to use once this needs to survive
 restarts or run across multiple instances.
+
+## The menu
+
+`/start` shows the welcome text with a persistent reply keyboard (buttons
+under the message box, not attached to a message); `/help` shows the same
+keyboard again. Each button is an ordinary text message, so `bot.js` checks for
+the five labels before treating text as "convert this to Word".
+
+| Button | What it does |
+| --- | --- |
+| 🎙 خلاصه پیام صوتی | Asks for a voice message; sending one runs the voice summary as always. |
+| 📄 خلاصه جزوه PDF | Your next PDF is summarized directly (no "summarize or compress?" question). |
+| 🌐 ترجمه و ساده‌سازی متن | Your next text is translated to Persian and simplified directly (no Word file). |
+| 🗜 فشرده‌سازی عکس و PDF | Your next photo or PDF is compressed directly. |
+| 💳 خرید اشتراک | Price, card number and receipt instructions (or the subscription end date if already subscribed). |
+
+These "next message" choices last 10 minutes, are used once, and are dropped
+if you send anything that doesn't match (see `src/services/userMode.js`). With no
+menu choice, everything behaves as before: text becomes a Word file with the two
+translate buttons, a PDF asks summarize-or-compress, a photo is compressed.
+One deliberate rule: after tapping **🗜**, a photo always means "compress",
+even if a payment is pending; otherwise a photo from a user who was just shown
+the paywall or the subscription screen is treated as a payment receipt.
+
+## Long PDFs
+
+Groq's free tier limits tokens **per minute** per model (`GROQ_TPM_LIMIT`, 6,000
+by default) and rejects any single request above it; the model's 128K context
+window is not the constraint. So a long PDF is never truncated: it is split into
+chunks on line and sentence boundaries (`textChunker.js`), each chunk is
+summarized (map), the partial summaries are merged in batches until one remains,
+and the last merge writes the final structured summary (`longSummarize.js`).
+
+- **Pacing.** Each request is sized to about half the per-minute budget, and a
+  sliding-window limiter (`tpmLimiter.js`) waits so that the trailing minute stays
+  under 90% of `GROQ_TPM_LIMIT`, using the token usage Groq reports back. If Groq
+  still answers 429 (voice summaries share the same quota), the request waits for
+  `Retry-After` and retries, up to four times.
+- **It takes time.** Throughput is capped by the budget: about 5,000 characters
+  per minute. The bot edits its "processing" message with the current part and a
+  time estimate, and deletes it when the summary arrives.
+- **Cost.** Only a delivered summary counts against the free quota; a failure,
+  a scanned PDF or a too-long PDF is refunded.
+- **Limit.** Text over `MAX_DOCUMENT_CHARS_FOR_SUMMARY` (40,000 characters by
+  default, around 10 minutes) is refused with a "send it in parts" message. The
+  whole bot shares Groq's daily token allowance, so this also keeps one document
+  from using it up.
+
+Short documents (a few thousand characters) still go in a single request.
 
 ## Free tier & subscriptions
 
@@ -208,6 +272,35 @@ rate limits still cap the cost.
 
 Run `npm test` for the automated tests (quota policy incl. concurrency,
 Supabase request shapes, and the payment flow against a mock bot).
+
+### Everyone (or you) looks unlimited
+
+The bot **fails open**: if it can't enforce limits it lets requests through
+rather than blocking everyone. Check these, in order:
+
+1. **Startup log** (Render → Logs). You should see `Monetization: enabled (3 free
+   premium requests/week per user).` followed by `Monetization: Supabase
+   connection OK.`
+   - `Monetization is DISABLED … missing env vars: X, Y` means those variables
+     aren't set on the host (a typo in the name counts as missing).
+   - `Monetization: Supabase check FAILED (…)` means the URL, key or table is
+     wrong: a 404 usually means `supabase/schema.sql` wasn't run, 401/403 a wrong
+     key. Use the **service_role** key; an anon/publishable key is reported here
+     too.
+   - Neither line at all means the host is still running an older deploy.
+2. **`/status`** (admin chat only, ignored for everyone else) reports whether
+   enforcement is on, whether the database answers, and **your own record**:
+   requests used, next reset, and subscription end date.
+3. **Your own account may have a subscription.** Approving a test payment from
+   the admin account (or tapping ✅ on your own receipt) gives that account 30
+   unlimited days, and `/status` shows it. To test the paywall again, delete or
+   edit your row in the `users` table in Supabase, or use a second account.
+4. If the database starts failing while running, the admin gets a Telegram
+   message (at most once an hour) and the log shows `[usage] check failed … limits
+   NOT enforced`.
+
+The admin account is **not** exempt from limits anywhere in the code (there is a
+test for it); `ADMIN_CHAT_ID` is only where receipts go and who may press ✅/❌.
 
 ## Local run
 
@@ -285,15 +378,17 @@ voice and PDF-summary flows (via the same session-store mechanism — see
 `src/handlers/callbacks.js`).
 
 No separate character-length guard is needed here: Telegram caps a single
-text message at 4096 characters, which stays comfortably under this Groq
-account's 8000 TPM budget even accounting for the prompt and a
-translation+simplification-length reply.
+text message at 4096 characters, so it fits in a single request under the
+Groq per-minute token budget even with the prompt and a
+translation+simplification-length reply (a 3,858-character English message
+measured about 3,800 tokens in total).
 
 ## PDF: summarize or compress?
 
-Since a PDF can go through either the compression or the summarization
-flow, sending one doesn't act immediately — the bot asks first via two
-inline buttons ("📝 خلاصه‌سازی" / "🗜 کم کردن حجم"). The choice, plus the
+A PDF sent right after tapping **📄** or **🗜** in [the menu](#the-menu) is
+summarized or compressed directly. A PDF sent with no menu choice can go
+through either flow, so the bot asks first via two inline buttons
+("📝 خلاصه‌سازی" / "🗜 کم کردن حجم"). The choice, plus the
 file's Telegram `file_id`, is kept in the same short-lived in-memory
 session store the voice-summary buttons use; the PDF itself is only
 re-downloaded once the user picks an action, so nothing large sits in

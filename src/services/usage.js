@@ -21,6 +21,16 @@ function createUsageService({
   log = console,
 }) {
   const enabled = Boolean(store);
+  let degradedHandler = null;
+  // Told about database failures so they can be surfaced (e.g. DM the admin);
+  // without this a broken database looks exactly like "everyone is unlimited".
+  const reportDegraded = (err) => {
+    try {
+      if (degradedHandler) degradedHandler(err);
+    } catch (handlerErr) {
+      log.error("[usage] degraded handler threw:", handlerErr && handlerErr.message);
+    }
+  };
   // Each lost race means someone else's request was counted, so a caller can
   // lose at most `limit` times before it sees the limit and stops.
   const maxAttempts = Math.max(5, limit + 3);
@@ -74,7 +84,8 @@ function createUsageService({
       log.warn(`[usage] gave up after ${maxAttempts} contended attempts for user ${userId}; allowing uncounted`);
       return { allowed: true, counted: false, degraded: true };
     } catch (err) {
-      log.error(`[usage] check failed for user ${userId}, allowing request:`, err && err.message);
+      log.error(`[usage] check failed for user ${userId}, allowing request (limits NOT enforced):`, err && err.message);
+      reportDegraded(err);
       return { allowed: true, counted: false, degraded: true };
     }
   }
@@ -107,23 +118,60 @@ function createUsageService({
     }
   }
 
-  /** { pending, subscribed } — pending means a receipt photo is expected. */
+  /**
+   * { pending, subscribed, subscribedUntil } — pending means a receipt photo is
+   * expected; subscribedUntil is the expiry in ms while subscribed, else null.
+   */
   async function getPaymentState(userId) {
-    if (!enabled) return { pending: false, subscribed: false };
+    const none = { pending: false, subscribed: false, subscribedUntil: null };
+    if (!enabled) return none;
     try {
       const user = await store.getUser(userId);
-      if (!user) return { pending: false, subscribed: false };
+      if (!user) return none;
       const t = now();
       const subscribed = isSubscribed(user, t);
       const pending =
         !subscribed &&
         Boolean(user.payment_pending_at) &&
         t - Date.parse(user.payment_pending_at) < pendingTtlMs;
-      return { pending, subscribed };
+      return { pending, subscribed, subscribedUntil: subscribed ? Date.parse(user.subscription_expires_at) : null };
     } catch (err) {
       log.error(`[usage] could not read payment state for user ${userId}:`, err && err.message);
-      return { pending: false, subscribed: false };
+      return none;
     }
+  }
+
+  /** Startup/status check that the database is reachable and correctly set up. */
+  async function probe() {
+    if (!enabled) return { ok: false, error: "monetization is not enabled" };
+    try {
+      const { warnings = [] } = (await store.ping()) || {};
+      return { ok: warnings.length === 0, warnings, error: warnings.join("; ") || undefined };
+    } catch (err) {
+      return { ok: false, error: err && err.message };
+    }
+  }
+
+  /** Everything /status shows: is enforcement on, does the DB answer, and this user's record. */
+  async function diagnose(userId) {
+    const report = { enabled, limit, db: await probe(), user: null };
+    if (enabled && report.db.ok) {
+      try {
+        const row = await store.getUser(userId);
+        if (row) {
+          const t = now();
+          report.user = {
+            used: row.weekly_request_count,
+            resetAt: Date.parse(row.week_reset_at),
+            subscribedUntil: isSubscribed(row, t) ? Date.parse(row.subscription_expires_at) : null,
+            windowExpired: Date.parse(row.week_reset_at) <= t,
+          };
+        }
+      } catch (err) {
+        report.db = { ok: false, error: err && err.message };
+      }
+    }
+    return report;
   }
 
   /** Admin approved: subscription runs for `days` from now. Returns expiry (ms). Throws on failure. */
@@ -152,6 +200,11 @@ function createUsageService({
     getPaymentState,
     activateSubscription,
     rejectPayment,
+    probe,
+    diagnose,
+    setDegradedHandler(fn) {
+      degradedHandler = fn;
+    },
   };
 }
 

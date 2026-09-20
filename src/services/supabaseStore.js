@@ -16,6 +16,24 @@ function assertUserId(id) {
   return id;
 }
 
+// The table has RLS on with no policies, so only a service/secret key works. A
+// public (anon/publishable) key reads back empty and is refused on writes,
+// which would otherwise look like "everything works, nobody is limited".
+function keyWarnings(key) {
+  const warnings = [];
+  if (/^sb_publishable_/.test(key)) {
+    warnings.push("SUPABASE_KEY is a publishable key; use the service_role / secret key");
+  } else if (key.split(".").length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString("utf8"));
+      if (payload.role === "anon") warnings.push("SUPABASE_KEY is the anon key; use the service_role key");
+    } catch {
+      // not a decodable JWT; nothing to say
+    }
+  }
+  return warnings;
+}
+
 function createSupabaseStore({
   url,
   key,
@@ -49,6 +67,12 @@ function createSupabaseStore({
   const enc = encodeURIComponent;
 
   return {
+    // Cheap read used at startup and by /status to prove the URL, key and table work.
+    async ping() {
+      await request("GET", "?select=telegram_user_id&limit=1");
+      return { warnings: keyWarnings(key) };
+    },
+
     async getUser(id) {
       assertUserId(id);
       const rows = await request("GET", `?telegram_user_id=eq.${id}&select=*&limit=1`);

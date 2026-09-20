@@ -5,6 +5,11 @@ const { handleCallbackQuery } = require("./handlers/callbacks");
 const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
 const { createSession } = require("./services/sessionStore");
 const { handlePaymentPhoto } = require("./handlers/payment");
+const { mainMenuKeyboard, isMenuLabel, handleMenuButton } = require("./handlers/menu");
+const { runTranslation } = require("./handlers/translate");
+const { handleStatusCommand, installDegradedAlert } = require("./handlers/admin");
+const { modes, MODES } = require("./services/userMode");
+const { usage } = require("./services/usage");
 const { welcomeMessage, helpMessage } = require("./messages");
 const config = require("./config");
 
@@ -33,6 +38,20 @@ if (config.MONETIZATION_ENABLED) {
   console.log("Monetization: disabled (no Supabase/payment env vars set) — all features unlimited.");
 }
 
+// A database that is unreachable or misconfigured makes the bot fail open
+// (everyone unlimited), so say so loudly at startup instead of staying quiet.
+if (config.MONETIZATION_ENABLED) {
+  usage.probe().then((result) => {
+    if (result.ok) {
+      console.log("Monetization: Supabase connection OK.");
+    } else {
+      console.error(
+        `Monetization: Supabase check FAILED (${result.error}). Free-tier limits will NOT be enforced until this is fixed.`
+      );
+    }
+  });
+}
+
 // Webhook mode kicks in when WEBHOOK_URL is set (e.g. deploying to
 // Runflare/Liara); otherwise this falls back to polling, which is how this
 // bot has always run — so existing deployments keep working unchanged.
@@ -57,12 +76,23 @@ if (useWebhook) {
   console.log("Bot is running (polling mode)...");
 }
 
+installDegradedAlert(bot);
+
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, welcomeMessage());
+  modes.clear(msg.from.id);
+  bot.sendMessage(msg.chat.id, welcomeMessage(), { reply_markup: mainMenuKeyboard() });
 });
 
 bot.onText(/^\/help(?:@\w+)?\s*$/, (msg) => {
-  bot.sendMessage(msg.chat.id, helpMessage());
+  bot.sendMessage(msg.chat.id, helpMessage(), { reply_markup: mainMenuKeyboard() });
+});
+
+// Admin only (silently ignored for anyone else): is enforcement on, does the
+// database answer, and what does the free-tier record for *me* look like.
+bot.onText(/^\/status(?:@\w+)?\s*$/, (msg) => {
+  handleStatusCommand(bot, msg).catch((err) => {
+    console.error("Unhandled error in /status:", err);
+  });
 });
 
 bot.on("message", async (msg) => {
@@ -72,6 +102,23 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const rawText = msg.text;
+
+  // Taps on the persistent menu arrive as ordinary text messages.
+  if (isMenuLabel(rawText)) {
+    handleMenuButton(bot, msg).catch((err) => {
+      console.error("Unhandled error in menu handler:", err);
+    });
+    return;
+  }
+
+  // "🌐 ترجمه و ساده‌سازی متن" was tapped: this text is what to translate.
+  if (modes.take(userId, MODES.TRANSLATE)) {
+    runTranslation(bot, chatId, userId, rawText, "translate").catch((err) => {
+      console.error("Unhandled error in translate handler:", err);
+    });
+    return;
+  }
+  modes.clear(userId); // any other text means the user moved on
 
   try {
     await bot.sendChatAction(chatId, "upload_document");
@@ -112,23 +159,29 @@ bot.on("message", async (msg) => {
 
 // New: voice-message transcription + summarization flow.
 bot.on("voice", (msg) => {
+  modes.clear(msg.from.id);
   handleVoiceMessage(bot, msg).catch((err) => {
     console.error("Unhandled error in voice handler:", err);
   });
 });
 
 bot.on("audio", (msg) => {
+  modes.clear(msg.from.id);
   handleVoiceMessage(bot, msg).catch((err) => {
     console.error("Unhandled error in voice handler:", err);
   });
 });
 
 // New: image/PDF compression flow.
-// A photo from a user who was just shown the paywall is a payment receipt
-// (forwarded to the admin); any other photo is an image to compress.
+// A photo is an image to compress, unless it comes from a user who was just
+// shown the paywall (or the subscription screen): then it is a payment
+// receipt and goes to the admin. Explicitly tapping "🗜 فشرده‌سازی عکس و PDF"
+// first always means compress.
 bot.on("photo", async (msg) => {
   try {
-    if (await handlePaymentPhoto(bot, msg)) return;
+    const wantsCompress = modes.take(msg.from.id, MODES.COMPRESS);
+    modes.clear(msg.from.id);
+    if (!wantsCompress && (await handlePaymentPhoto(bot, msg))) return;
     await handlePhotoMessage(bot, msg);
   } catch (err) {
     console.error("Unhandled error in photo handler:", err);

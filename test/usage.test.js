@@ -154,10 +154,10 @@ test("fails open when the database is unreachable", async () => {
 
 test("payment state: pending within the TTL, not after it, never while subscribed", async () => {
   const { usage, clock } = setup();
-  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: false });
+  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: false, subscribedUntil: null });
 
   await usage.markPaymentPending(42);
-  assert.deepEqual(await usage.getPaymentState(42), { pending: true, subscribed: false });
+  assert.deepEqual(await usage.getPaymentState(42), { pending: true, subscribed: false, subscribedUntil: null });
 
   clock.advance(23 * 60 * 60 * 1000);
   assert.equal((await usage.getPaymentState(42)).pending, true);
@@ -166,8 +166,8 @@ test("payment state: pending within the TTL, not after it, never while subscribe
   assert.equal((await usage.getPaymentState(42)).pending, false);
 
   await usage.markPaymentPending(42);
-  await usage.activateSubscription(42, 30);
-  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: true });
+  const expiresAt = await usage.activateSubscription(42, 30);
+  assert.deepEqual(await usage.getPaymentState(42), { pending: false, subscribed: true, subscribedUntil: expiresAt });
 });
 
 test("rejectPayment keeps the user pending so a corrected receipt still reaches the admin", async () => {
@@ -186,4 +186,63 @@ test("a limit of 0 blocks everyone without a subscription", async () => {
   assert.equal((await usage.checkAndConsume(42)).allowed, false);
   clock.advance(8 * DAY);
   assert.equal((await usage.checkAndConsume(42)).allowed, false);
+});
+
+test("probe: ok when the database answers, with the reason when it doesn't", async () => {
+  assert.deepEqual(await setup().usage.probe(), { ok: true, warnings: [], error: undefined });
+
+  const broken = setup({ storeOptions: { failWith: new Error("Supabase GET users failed (404): relation does not exist") } });
+  const result = await broken.usage.probe();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /404/);
+});
+
+test("probe: a public (anon/publishable) key is reported as a problem even though reads succeed", async () => {
+  const { usage } = setup({ storeOptions: { pingWarnings: ["SUPABASE_KEY is the anon key; use the service_role key"] } });
+  const result = await usage.probe();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /anon key/);
+});
+
+test("diagnose: reports enforcement, database health and the caller's own record", async () => {
+  const { usage, clock } = setup();
+  assert.equal((await usage.diagnose(42)).user, null);
+
+  await usage.checkAndConsume(42);
+  await usage.checkAndConsume(42);
+  const report = await usage.diagnose(42);
+  assert.equal(report.enabled, true);
+  assert.equal(report.db.ok, true);
+  assert.equal(report.user.used, 2);
+  assert.equal(report.user.resetAt, clock() + 7 * DAY);
+  assert.equal(report.user.subscribedUntil, null);
+
+  await usage.activateSubscription(42, 30);
+  assert.equal((await usage.diagnose(42)).user.subscribedUntil, clock() + 30 * DAY);
+});
+
+test("diagnose: with monetization disabled it says so instead of throwing", async () => {
+  const { usage } = setup({ noStore: true });
+  const report = await usage.diagnose(42);
+  assert.equal(report.enabled, false);
+  assert.equal(report.db.ok, false);
+});
+
+test("a database failure is reported through the degraded handler while the request is still allowed", async () => {
+  const { usage } = setup({ storeOptions: { failWith: new Error("connection refused") } });
+  const seen = [];
+  usage.setDegradedHandler((err) => seen.push(err.message));
+
+  const gate = await usage.checkAndConsume(42);
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.degraded, true);
+  assert.deepEqual(seen, ["connection refused"]);
+});
+
+test("a throwing degraded handler never breaks the request", async () => {
+  const { usage } = setup({ storeOptions: { failWith: new Error("down") } });
+  usage.setDegradedHandler(() => {
+    throw new Error("handler bug");
+  });
+  assert.equal((await usage.checkAndConsume(42)).allowed, true);
 });

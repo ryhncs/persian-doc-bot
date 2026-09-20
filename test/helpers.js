@@ -2,7 +2,7 @@
 // loop before touching state, so concurrent callers interleave the way they
 // would against a real database; the check-and-write after the yield is
 // synchronous, i.e. atomic, like a conditional PATCH.
-function createFakeStore({ failWith } = {}) {
+function createFakeStore({ failWith, pingWarnings = [] } = {}) {
   const rows = new Map();
   const tick = () => new Promise((resolve) => setImmediate(resolve));
   const guard = async () => {
@@ -20,6 +20,10 @@ function createFakeStore({ failWith } = {}) {
 
   return {
     rows,
+    async ping() {
+      await guard();
+      return { warnings: pingWarnings };
+    },
     async getUser(id) {
       await guard();
       return copy(rows.get(id));
