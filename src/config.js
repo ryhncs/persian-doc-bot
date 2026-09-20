@@ -68,6 +68,38 @@ const GLOBAL_LLM_PER_MINUTE = 28;
 const MAX_DOCUMENT_CHARS_FOR_SUMMARY =
   parseInt(process.env.MAX_DOCUMENT_CHARS_FOR_SUMMARY, 10) || 8000;
 
+// --- Monetization: weekly free-tier limit + manual card-to-card subscription.
+// Per-user state lives in Supabase (see supabase/schema.sql). Enforcement is
+// only switched on when ALL five required vars below are set; if some but not
+// all are set the bot logs which are missing and stays unlimited, rather than
+// locking users behind a paywall that has no card number on it.
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
+const SUBSCRIPTION_PRICE_TOMAN = process.env.SUBSCRIPTION_PRICE_TOMAN || "";
+const CARD_NUMBER = process.env.CARD_NUMBER || "";
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "";
+// Optional: shown to users whose payment was rejected (e.g. "@your_username").
+const ADMIN_CONTACT = process.env.ADMIN_CONTACT || "";
+
+const freeRequestsEnv = parseInt(process.env.FREE_REQUESTS_PER_WEEK, 10);
+const FREE_REQUESTS_PER_WEEK =
+  Number.isInteger(freeRequestsEnv) && freeRequestsEnv >= 0 ? freeRequestsEnv : 3;
+const SUBSCRIPTION_DAYS = 30;
+// A user who was shown the paywall can send a receipt photo for this long;
+// after that, photos go back to being treated as "compress this image".
+const PENDING_PAYMENT_TTL_HOURS = 24;
+
+const MISSING_MONETIZATION_VARS = Object.entries({
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  SUBSCRIPTION_PRICE_TOMAN,
+  CARD_NUMBER,
+  ADMIN_CHAT_ID,
+})
+  .filter(([, value]) => !value)
+  .map(([name]) => name);
+const MONETIZATION_ENABLED = MISSING_MONETIZATION_VARS.length === 0;
+
 module.exports = {
   TELEGRAM_BOT_TOKEN,
   GROQ_API_KEY,
@@ -83,4 +115,15 @@ module.exports = {
   GLOBAL_WHISPER_PER_MINUTE,
   GLOBAL_LLM_PER_MINUTE,
   MAX_DOCUMENT_CHARS_FOR_SUMMARY,
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  SUBSCRIPTION_PRICE_TOMAN,
+  CARD_NUMBER,
+  ADMIN_CHAT_ID,
+  ADMIN_CONTACT,
+  FREE_REQUESTS_PER_WEEK,
+  SUBSCRIPTION_DAYS,
+  PENDING_PAYMENT_TTL_HOURS,
+  MISSING_MONETIZATION_VARS,
+  MONETIZATION_ENABLED,
 };

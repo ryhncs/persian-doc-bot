@@ -21,8 +21,8 @@ ffmpeg.setFfmpegPath(ffmpegPath);
  */
 async function convertOggToWav(inputBuffer) {
   const tmpId = crypto.randomBytes(6).toString("hex");
-  const inputPath = path.join(os.tmpdir(), `voicesum-${tmpId}.oga`);
-  const outputPath = path.join(os.tmpdir(), `voicesum-${tmpId}.wav`);
+  const inputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.oga`);
+  const outputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.wav`);
 
   await fs.writeFile(inputPath, inputBuffer);
 

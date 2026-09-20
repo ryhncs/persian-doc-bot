@@ -9,6 +9,11 @@ const { translateAndSimplify, translateToEnglish } = require("../services/transl
 const config = require("../config");
 const { GroqRateLimitError } = require("../services/groqClient");
 const { checkGlobalMinuteRate } = require("../services/rateLimiter");
+const {
+  gatePremiumFeature,
+  releasePremiumFeature,
+  handlePaymentCallback,
+} = require("./payment");
 
 const NOT_FOR_YOU = "این دکمه برای فایل/پیام صوتی خودت نیست.";
 const EXPIRED = "این نشست منقضی شده. فایل یا پیام صوتی رو دوباره بفرست.";
@@ -142,8 +147,15 @@ async function handleDocumentChoiceCallback(bot, callbackQuery, action, sessionI
     }
 
     await bot.answerCallbackQuery(callbackQuery.id);
+
+    // Weekly free-tier limit (subscribers are unlimited). Refunded below
+    // unless a summary was actually delivered.
+    const gate = await gatePremiumFeature(bot, chatId, callbackQuery.from.id);
+    if (!gate) return;
+
     await bot.sendMessage(chatId, PROCESSING_SUMMARY);
 
+    let succeeded = false;
     try {
       const { buffer } = await downloadTelegramFile(bot, session.fileId);
       const { text } = await extractPdfText(buffer);
@@ -181,6 +193,7 @@ async function handleDocumentChoiceCallback(bot, callbackQuery, action, sessionI
           ],
         },
       });
+      succeeded = true;
     } catch (err) {
       console.error("PDF summarization failed:", {
         chatId,
@@ -189,6 +202,8 @@ async function handleDocumentChoiceCallback(bot, callbackQuery, action, sessionI
       });
       const message = err instanceof GroqRateLimitError ? RATE_LIMIT_MESSAGE : SUMMARY_ERROR;
       await bot.sendMessage(chatId, message);
+    } finally {
+      if (!succeeded) await releasePremiumFeature(callbackQuery.from.id, gate);
     }
   }
 }
@@ -230,8 +245,15 @@ async function handleTranslateCallback(bot, callbackQuery, action, sessionId) {
   }
 
   await bot.answerCallbackQuery(callbackQuery.id);
+
+  // Weekly free-tier limit (subscribers are unlimited). Refunded below unless
+  // a result was actually delivered.
+  const gate = await gatePremiumFeature(bot, chatId, callbackQuery.from.id);
+  if (!gate) return;
+
   await bot.sendMessage(chatId, action === "toEnglish" ? PROCESSING_TO_ENGLISH : PROCESSING_TRANSLATE_SIMPLIFY);
 
+  let succeeded = false;
   try {
     const result =
       action === "toEnglish"
@@ -255,6 +277,7 @@ async function handleTranslateCallback(bot, callbackQuery, action, sessionId) {
         ],
       },
     });
+    succeeded = true;
   } catch (err) {
     console.error("Translate/simplify failed:", {
       chatId,
@@ -264,6 +287,8 @@ async function handleTranslateCallback(bot, callbackQuery, action, sessionId) {
     });
     const message = err instanceof GroqRateLimitError ? RATE_LIMIT_MESSAGE : TRANSLATE_ERROR;
     await bot.sendMessage(chatId, message);
+  } finally {
+    if (!succeeded) await releasePremiumFeature(callbackQuery.from.id, gate);
   }
 }
 
@@ -285,6 +310,13 @@ async function handleCallbackQuery(bot, callbackQuery) {
   if (data.startsWith("txt:")) {
     const [, action, sessionId] = data.split(":");
     await handleTranslateCallback(bot, callbackQuery, action, sessionId);
+    return;
+  }
+
+  // Admin's "✅ تایید" / "❌ رد" buttons on a forwarded payment receipt.
+  if (data.startsWith("pay:")) {
+    const [, action, targetUserId] = data.split(":");
+    await handlePaymentCallback(bot, callbackQuery, action, targetUserId);
     return;
   }
 }

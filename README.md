@@ -1,37 +1,43 @@
-# VoiceSum Bot
+# کوله (Kooleh) — @koolehbot
 
-A Telegram bot, gradually turning into a student assistant. Five features
-so far:
+Kooleh ("backpack") is a friendly Persian-language student-assistant Telegram
+bot. All user-facing text is Persian, and it copes with mixed Persian/English
+input.
 
-1. **Persian doc formatting** (original) — send any messy pasted text, get
-   back a clean, RTL, properly fonted `.docx` file.
-2. **VoiceSum** — send or forward a voice message, get back a Persian
+1. **Word export** — send any messy pasted text, get back a clean, RTL,
+   properly fonted `.docx` file. Always free.
+2. **Voice summary** — send or forward a voice message, get back a Persian
    summary in chat, with buttons to see the full transcript or export the
    summary/transcript as a `.docx`.
-3. **File compression** — send a photo or a PDF and choose "کم کردن حجم",
-   get it back at a fraction of the size. Images are re-encoded with
+3. **PDF summarization** — send a PDF and choose "خلاصه‌سازی": the bot
+   extracts its text and returns a structured Persian summary (key points as
+   bullet lines), with the same "متن کامل" / "خروجی Word" buttons as the
+   voice flow.
+4. **Translate & simplify** — every text message converted to a `.docx`
+   (feature 1) also gets two buttons: "🌐 ترجمه و ساده‌سازی (فارسی)"
+   translates non-Persian text to fluent Persian, then rewrites it
+   (translated or already-Persian) in simpler language; "🔁 ترجمه به
+   انگلیسی" translates the text (typically Persian) into plain English with
+   no simplification step. Both reuse the same "متن اصلی" / "خروجی Word"
+   buttons as the other summary-style flows.
+5. **File compression** — send a photo, or a PDF and choose "کم کردن حجم",
+   and get it back at a fraction of the size. Images are re-encoded with
    `sharp`; PDFs are compressed with Ghostscript (downsamples embedded
-   images, subsets fonts, leaves text/vector content untouched).
-4. **PDF summarization** — send a PDF and choose "خلاصه‌سازی" instead:
-   the bot extracts its text and returns a structured Persian summary (key
-   points as bullet lines), with the same "متن کامل" / "خروجی Word"
-   buttons as the VoiceSum flow.
-5. **Translate & simplify** (new, student assistant) — every text message
-   converted to a `.docx` (feature 1) also gets two buttons: "🌐 ترجمه و
-   ساده‌سازی (فارسی)" translates non-Persian text to fluent Persian, then
-   rewrites it (translated or already-Persian) in simpler language; "🔁
-   ترجمه به انگلیسی" translates the text (typically Persian) into plain
-   English with no simplification step. Both reuse the same "متن اصلی" /
-   "خروجی Word" buttons as the other summary-style flows.
+   images, subsets fonts, leaves text/vector content untouched). Always
+   free.
 
-The doc-formatting and VoiceSum features share the same `docx` generation
+Features 2–4 (the ones that call an LLM) are limited to a free weekly quota;
+a manual card-to-card monthly subscription lifts the limit — see
+[Free tier & subscriptions](#free-tier--subscriptions).
+
+The Word export and the summary features share the same `docx` generation
 pipeline (`rightToLeft: true`, Vazirmatn for Persian / Poppins for Latin
 text).
 
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) on Telegram → get a token.
-2. Get a Groq API key at [console.groq.com](https://console.groq.com) (needed for VoiceSum only — text formatting works without it).
+2. Get a Groq API key at [console.groq.com](https://console.groq.com) (needed for the summary/translate features — Word export and compression work without it).
 3. Make sure Ghostscript (`gs`) is on `PATH` — needed for PDF compression only; image compression and everything else works without it. The Dockerfile in this repo already installs it for Render (and Runflare/Liara, if you deploy there); for local dev, install it with your OS package manager (e.g. `apt install ghostscript`, `brew install ghostscript`).
 4. Copy `.env.example` to `.env` and fill in the values (see [Environment variables](#environment-variables)).
 5. Install dependencies:
@@ -49,7 +55,7 @@ text).
 | Variable                      | Required | Default                   | Notes                                                                 |
 | ------------------------------ | -------- | -------------------------- | ---------------------------------------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`           | yes      | —                           | Falls back to the legacy `BOT_TOKEN` name if that's already set.       |
-| `GROQ_API_KEY`                 | for VoiceSum | —                       | Text-formatting flow still works without it; voice replies with a friendly Persian error if unset. |
+| `GROQ_API_KEY`                 | for the AI features | —                | Word export and compression still work without it; the AI features reply with a friendly Persian error if unset. |
 | `WEBHOOK_URL`                  | no       | unset (polling mode)       | Public HTTPS base URL. Set this on Runflare/Liara to switch to webhook mode; on Render this is set automatically via `RENDER_EXTERNAL_URL` (see Deployment). Leave unset for polling (default, used for local dev). |
 | `PORT`                         | no       | `3000`                     | Only used in webhook mode.                                             |
 | `WHISPER_MODEL`                | no       | `whisper-large-v3`         | Or `whisper-large-v3-turbo` for lower accuracy / faster.               |
@@ -59,8 +65,22 @@ text).
 | `DAILY_VOICE_LIMIT_PER_USER`   | no       | `20`                       | Per-user daily cap on voice messages processed (in-memory, resets at UTC midnight). |
 | `PDF_COMPRESS_PRESET`          | no       | `/ebook`                  | Ghostscript `PDFSETTINGS` preset for PDF compression. Other options: `/screen` (smallest, lowest quality), `/printer`, `/prepress` (largest, closest to original). |
 | `MAX_DOCUMENT_CHARS_FOR_SUMMARY` | no     | `8000`                    | Character-count cap on extracted PDF text before summarization is attempted — sized to stay under Groq's measured per-minute token cap for `SUMMARY_MODEL` on this account (see `config.js`). Longer documents get a friendly "too long, send a shorter excerpt" reply instead of a failed summary. |
+| `SUPABASE_URL`                 | for limits | —                     | Supabase project URL. See [Free tier & subscriptions](#free-tier--subscriptions). |
+| `SUPABASE_KEY`                 | for limits | —                     | Supabase **service_role** key (server-side only — never expose it). |
+| `SUBSCRIPTION_PRICE_TOMAN`     | for limits | —                     | Monthly price shown on the paywall, digits only (e.g. `150000`). |
+| `CARD_NUMBER`                  | for limits | —                     | Card number users transfer to, shown on the paywall. |
+| `ADMIN_CHAT_ID`                | for limits | —                     | Telegram user id (or group chat id) that receives payment receipts with ✅/❌ buttons. The admin must press Start on the bot once. |
+| `ADMIN_CONTACT`                | no       | unset                      | Shown to users whose payment was rejected, e.g. `@your_username`. |
+| `FREE_REQUESTS_PER_WEEK`       | no       | `3`                        | Free AI-feature requests per user per rolling 7 days. |
 
-## Core VoiceSum flow
+"for limits" = enforcement only switches on when **all five** of
+`SUPABASE_URL`, `SUPABASE_KEY`, `SUBSCRIPTION_PRICE_TOMAN`, `CARD_NUMBER` and
+`ADMIN_CHAT_ID` are set. If none are set the bot runs with every feature
+unlimited (handy for local dev); if only some are set it logs which are
+missing at startup and stays unlimited, rather than showing a paywall with no
+card number on it.
+
+## Voice summary flow
 
 1. User sends/forwards a voice message in a private chat.
 2. Bot shows "⏳ در حال پردازش پیام صوتی..." immediately.
@@ -84,11 +104,13 @@ text).
 src/
   bot.js                 Entry point — wires up all handlers, polling/webhook setup
   config.js               Env vars + defaults in one place
-  docGenerator.js          Text → RTL Persian .docx (shared by both features)
+  docGenerator.js          Text → RTL Persian .docx (shared by the Word export and summary features)
+  messages.js              /start and /help copy
   handlers/
     voice.js               Voice/audio message → transcript → summary → reply
     callbacks.js            "متن کامل" / "خروجی Word" (+ PDF-choice, + translate) button handling
     compress.js              Photo/document message → compressed file → reply
+    payment.js                Paywall, receipt-photo forwarding to the admin, ✅/❌ approval buttons
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -101,8 +123,14 @@ src/
     imageCompress.js                 Image → smaller JPEG via sharp
     pdfCompress.js                    PDF → smaller PDF via Ghostscript (`gs` binary)
     pdfText.js                        PDF → extracted plain text via pdf-parse (no native binary)
+    usage.js                           Free weekly quota + subscription policy (fails open)
+    supabaseStore.js                    Supabase (PostgREST) client for the `users` table, plain fetch
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
+    format.js                        Persian numbers/dates, HTML escaping
+supabase/
+  schema.sql                        `users` table — run once in the Supabase SQL editor
+test/                               `npm test` (node:test): quota policy, Supabase requests, payment flow
 ```
 
 ## Swapping the summarization model
@@ -125,12 +153,61 @@ Both are in-memory Maps — fine for a single-instance MVP. The file has a
 comment showing the Redis key scheme to use once this needs to survive
 restarts or run across multiple instances.
 
-## Paid-tier hook (future)
+## Free tier & subscriptions
 
-Nothing currently gates `.docx` exports. To add a "paid users skip limits"
-check later: `src/handlers/voice.js` and `src/handlers/callbacks.js` are the
-only places that call into `rateLimiter.js` — add a user-lookup + bypass
-there without touching the Groq or docx service modules.
+**What counts.** Voice summary, PDF summary and translate/simplify (both
+buttons) share one quota: **3 requests per user per rolling 7 days**
+(`FREE_REQUESTS_PER_WEEK`). Text→Word export and image/PDF compression never
+count and are never blocked.
+
+**How the window works.** A user's window starts at their first counted
+request; `week_reset_at` is when the counter next resets. A request that
+fails (Groq error, "PDF has no text layer", "too long", rate limit…) is
+refunded — only a delivered result costs a request. Subscribers
+(`subscription_expires_at` in the future) are unlimited and never counted.
+
+**The paywall.** When a free user is out of requests they get a message with
+the monthly price (`SUBSCRIPTION_PRICE_TOMAN`), the card number
+(`CARD_NUMBER`, tap-to-copy) and instructions to send a screenshot of the
+transfer as a photo.
+
+**Receipts and approval.** Showing the paywall sets `payment_pending_at`. For
+the next 24 hours a photo from that user is treated as a payment receipt
+instead of "compress this image": it is sent to `ADMIN_CHAT_ID` with the
+user's name/@username/id and two inline buttons.
+
+- **✅ تایید** → `subscription_expires_at = now + 30 days`, the pending flag is
+  cleared, and the user is told their subscription is active, with the
+  (Jalali) expiry date.
+- **❌ رد** → the user is told the payment couldn't be verified (with
+  `ADMIN_CONTACT` if set) and to double-check and resend. They stay "pending",
+  so a corrected receipt still reaches the admin.
+
+Only the admin chat can press these buttons, and the buttons are removed once
+pressed. Repeated photos from one user are throttled to one per 15 s so the
+admin can't be spammed.
+
+**If the database is down** the bot fails *open*: requests are allowed and not
+counted (and logged), rather than locking everyone out. The Groq free-tier
+rate limits still cap the cost.
+
+### Setting it up
+
+1. Create a project at [supabase.com](https://supabase.com), open **SQL Editor**
+   and run [`supabase/schema.sql`](supabase/schema.sql). It creates the
+   `users` table and turns on row-level security with no policies, so only the
+   service key can touch it.
+2. From **Project Settings → API** copy the project URL and the
+   **service_role** key.
+3. Set the five monetization env vars (see the table above) — on Render, in the
+   service's **Environment** tab — and redeploy. The admin must press **Start**
+   on the bot once so Telegram lets it message them.
+4. Watch the startup log: `Monetization: enabled (3 free premium requests/week
+   per user).` confirms everything is wired; a `Monetization is DISABLED —
+   missing env vars: …` warning tells you what's left.
+
+Run `npm test` for the automated tests (quota policy incl. concurrency,
+Supabase request shapes, and the payment flow against a mock bot).
 
 ## Local run
 
@@ -171,12 +248,15 @@ require a paid plan), so this runs in webhook mode. `render.yaml` is set up
 as a Blueprint so this needs no manual URL configuration:
 
 1. In the Render dashboard: **New > Blueprint**, connect this GitHub repo,
-   and pick the `claude/voicesum-telegram-bot-138b43` branch (or whichever
-   branch you're deploying). Render reads `render.yaml` and creates a Web
-   Service named `voicesum-staging` from the existing `Dockerfile`.
+   and pick the branch you're deploying (normally `master`). Render reads
+   `render.yaml` and creates the Web Service it defines from the existing
+   `Dockerfile`.
 2. When prompted for the two secret env vars, fill in:
    - `TELEGRAM_BOT_TOKEN`
    - `GROQ_API_KEY`
+
+   Then add the monetization variables in the service's **Environment** tab
+   (see [Free tier & subscriptions](#free-tier--subscriptions)).
 3. Deploy. `PORT` and `RENDER_EXTERNAL_URL` are auto-injected by Render;
    `src/config.js` falls back to `RENDER_EXTERNAL_URL` for `WEBHOOK_URL` when
    it isn't set explicitly, so the webhook URL is configured automatically —
@@ -199,7 +279,7 @@ for summarization but with different prompts:
   English abstract/email from Persian notes, for example.
 
 Both results get the same "متن اصلی" / "خروجی Word" buttons as the
-VoiceSum and PDF-summary flows (via the same session-store mechanism — see
+voice and PDF-summary flows (via the same session-store mechanism — see
 `src/services/translateSimplify.js`'s `translateAndSimplify` /
 `translateToEnglish`, and the `txt:translate` / `txt:toEnglish` handling in
 `src/handlers/callbacks.js`).
@@ -215,13 +295,13 @@ Since a PDF can go through either the compression or the summarization
 flow, sending one doesn't act immediately — the bot asks first via two
 inline buttons ("📝 خلاصه‌سازی" / "🗜 کم کردن حجم"). The choice, plus the
 file's Telegram `file_id`, is kept in the same short-lived in-memory
-session store the VoiceSum buttons use; the PDF itself is only
+session store the voice-summary buttons use; the PDF itself is only
 re-downloaded once the user picks an action, so nothing large sits in
 memory while they're deciding.
 
 Summarization extracts text with `pdf-parse` (pure JS, separate from the
 Ghostscript-based compression path) and summarizes it with the same Groq
-model as VoiceSum, but a different system prompt tuned for written
+model as the voice summary, but a different system prompt tuned for written
 documents (lecture notes, slides, papers) rather than spoken transcripts —
 see `src/services/summarize.js`. A PDF with no real text layer (a scan with
 no OCR) gets a clear "can't extract text from this" reply rather than a

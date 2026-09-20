@@ -5,6 +5,7 @@ const { summarizeTranscript } = require("../services/summarize");
 const { createSession } = require("../services/sessionStore");
 const { checkAndRecordDailyUser, checkGlobalMinuteRate } = require("../services/rateLimiter");
 const { GroqRateLimitError } = require("../services/groqClient");
+const { gatePremiumFeature, releasePremiumFeature } = require("./payment");
 
 const PROCESSING_MESSAGE = "⏳ در حال پردازش پیام صوتی... چند لحظه صبر کن.";
 const DAILY_LIMIT_MESSAGE = "امروز به سقف تعداد پیام‌های صوتی رسیدی. فردا دوباره امتحان کن.";
@@ -74,6 +75,13 @@ async function handleVoiceMessage(bot, msg) {
     return;
   }
 
+  // Weekly free-tier limit (subscribers are unlimited). Counted only once the
+  // cheap validations above have passed, and refunded below unless a summary
+  // was actually delivered.
+  const gate = await gatePremiumFeature(bot, chatId, userId);
+  if (!gate) return;
+
+  let succeeded = false;
   let processingMsg;
   try {
     processingMsg = await bot.sendMessage(chatId, PROCESSING_MESSAGE);
@@ -111,6 +119,7 @@ async function handleVoiceMessage(bot, msg) {
         ],
       },
     });
+    succeeded = true;
   } catch (err) {
     console.error("Voice message processing failed:", {
       chatId,
@@ -122,6 +131,7 @@ async function handleVoiceMessage(bot, msg) {
     const message = err instanceof GroqRateLimitError ? RATE_LIMIT_MESSAGE : GENERIC_ERROR_MESSAGE;
     await bot.sendMessage(chatId, message);
   } finally {
+    if (!succeeded) await releasePremiumFeature(userId, gate);
     if (processingMsg) {
       bot.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
     }

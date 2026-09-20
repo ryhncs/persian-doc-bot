@@ -4,6 +4,8 @@ const { handleVoiceMessage } = require("./handlers/voice");
 const { handleCallbackQuery } = require("./handlers/callbacks");
 const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
 const { createSession } = require("./services/sessionStore");
+const { handlePaymentPhoto } = require("./handlers/payment");
+const { welcomeMessage, helpMessage } = require("./messages");
 const config = require("./config");
 
 const TOKEN = config.TELEGRAM_BOT_TOKEN;
@@ -19,6 +21,16 @@ if (!config.GROQ_API_KEY) {
   console.warn(
     "GROQ_API_KEY is not set — voice transcription/summarization will reply with a friendly error until it is configured."
   );
+}
+
+if (config.MONETIZATION_ENABLED) {
+  console.log(`Monetization: enabled (${config.FREE_REQUESTS_PER_WEEK} free premium requests/week per user).`);
+} else if (config.MISSING_MONETIZATION_VARS.length < 5) {
+  console.warn(
+    `Monetization is DISABLED (all features unlimited) — missing env vars: ${config.MISSING_MONETIZATION_VARS.join(", ")}.`
+  );
+} else {
+  console.log("Monetization: disabled (no Supabase/payment env vars set) — all features unlimited.");
 }
 
 // Webhook mode kicks in when WEBHOOK_URL is set (e.g. deploying to
@@ -45,23 +57,12 @@ if (useWebhook) {
   console.log("Bot is running (polling mode)...");
 }
 
-const WELCOME = [
-  "سلام! 👋",
-  "",
-  "هر متن شلوغی رو (کپی‌شده از واتساپ، وردپرس، هر جا) برام بفرست،",
-  "یه فایل Word مرتب، راست‌به‌چپ و با فونت درست برات می‌سازم.",
-  "",
-  "یا یه پیام صوتی برام بفرست (یا فوروارد کن) تا متنش رو پیاده و خلاصه کنم.",
-  "",
-  "یه عکس بفرستی حجمش رو برات کم می‌کنم؛ یه فایل پی‌دی‌اف بفرستی می‌پرسم می‌خوای خلاصه‌ش کنم یا حجمش رو کم کنم.",
-  "",
-  "زیر هر متنی که برات Word می‌سازم دو تا دکمه‌ی ترجمه هم هست: یکی برای ترجمه و ساده‌سازی به فارسی، یکی برای ترجمه به انگلیسی.",
-  "",
-  "کافیه متن، صدا، عکس یا پی‌دی‌اف رو بفرستی — چیز دیگه‌ای لازم نیست.",
-].join("\n");
-
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, WELCOME);
+  bot.sendMessage(msg.chat.id, welcomeMessage());
+});
+
+bot.onText(/^\/help(?:@\w+)?\s*$/, (msg) => {
+  bot.sendMessage(msg.chat.id, helpMessage());
 });
 
 bot.on("message", async (msg) => {
@@ -123,10 +124,15 @@ bot.on("audio", (msg) => {
 });
 
 // New: image/PDF compression flow.
-bot.on("photo", (msg) => {
-  handlePhotoMessage(bot, msg).catch((err) => {
+// A photo from a user who was just shown the paywall is a payment receipt
+// (forwarded to the admin); any other photo is an image to compress.
+bot.on("photo", async (msg) => {
+  try {
+    if (await handlePaymentPhoto(bot, msg)) return;
+    await handlePhotoMessage(bot, msg);
+  } catch (err) {
     console.error("Unhandled error in photo handler:", err);
-  });
+  }
 });
 
 bot.on("document", (msg) => {
