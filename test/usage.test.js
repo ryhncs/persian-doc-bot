@@ -246,3 +246,25 @@ test("a throwing degraded handler never breaks the request", async () => {
   });
   assert.equal((await usage.checkAndConsume(42)).allowed, true);
 });
+
+test("payment pending survives a broken database, so a receipt photo still reaches the admin", async () => {
+  const { usage } = setup({ storeOptions: { failWith: new Error("PGRST125") } });
+  assert.equal((await usage.getPaymentState(7)).pending, false);
+  await usage.markPaymentPending(7); // DB write fails; remembered in memory
+  assert.equal((await usage.getPaymentState(7)).pending, true);
+  assert.equal((await usage.getPaymentState(8)).pending, false, "only the user who was shown the paywall");
+});
+
+test("in-memory pending expires with the TTL, and approval clears it", async () => {
+  const { usage, clock } = setup();
+  await usage.markPaymentPending(9);
+  assert.equal((await usage.getPaymentState(9)).pending, true);
+  await usage.activateSubscription(9, 30);
+  const state = await usage.getPaymentState(9);
+  assert.equal(state.pending, false);
+  assert.equal(state.subscribed, true);
+
+  await usage.markPaymentPending(10);
+  clock.advance(25 * 60 * 60 * 1000);
+  assert.equal((await usage.getPaymentState(10)).pending, false);
+});

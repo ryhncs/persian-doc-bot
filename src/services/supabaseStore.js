@@ -34,13 +34,25 @@ function keyWarnings(key) {
   return warnings;
 }
 
+// The env var is pasted by hand, and Supabase shows several URLs that look
+// alike. Accept the project URL however it arrives (quotes, spaces, no scheme,
+// trailing slash, or already ending in /rest/v1) and return the bare project
+// URL. A doubled /rest/v1 is what makes PostgREST answer PGRST125 "Invalid path
+// specified in request URL".
+function normalizeSupabaseUrl(raw) {
+  let url = String(raw || "").trim().replace(/^["']+|["']+$/g, "").trim();
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  return url.replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, "");
+}
+
 function createSupabaseStore({
   url,
   key,
   fetchImpl = (...args) => globalThis.fetch(...args),
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
-  const base = `${url}/rest/v1/users`;
+  const base = `${normalizeSupabaseUrl(url)}/rest/v1/users`;
 
   async function request(method, query, { body, prefer } = {}) {
     const res = await fetchImpl(`${base}${query}`, {
@@ -57,7 +69,8 @@ function createSupabaseStore({
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`Supabase ${method} users failed (${res.status}): ${detail.slice(0, 300)}`);
+      // Name the endpoint (never the key) so a wrong SUPABASE_URL is obvious from /status.
+      throw new Error(`Supabase ${method} ${base} failed (${res.status}): ${detail.slice(0, 300)}`);
     }
 
     const text = await res.text();
@@ -139,4 +152,4 @@ function createSupabaseStore({
   };
 }
 
-module.exports = { createSupabaseStore };
+module.exports = { createSupabaseStore, normalizeSupabaseUrl };

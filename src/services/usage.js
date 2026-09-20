@@ -35,6 +35,18 @@ function createUsageService({
   // lose at most `limit` times before it sees the limit and stops.
   const maxAttempts = Math.max(5, limit + 3);
   const iso = (ms) => new Date(ms).toISOString();
+  // "Shown the paywall / subscribe screen" is also remembered in memory, so a
+  // receipt photo still reaches the admin when the database write or read fails.
+  // (Lost on restart, which is fine: the window is short and the DB is the
+  // durable copy whenever it works.)
+  const localPending = new Map(); // userId -> ms
+  const localPendingFresh = (userId, t) => {
+    const at = localPending.get(userId);
+    if (at === undefined) return false;
+    if (t - at < pendingTtlMs) return true;
+    localPending.delete(userId);
+    return false;
+  };
   const isSubscribed = (user, t) =>
     Boolean(user.subscription_expires_at) && Date.parse(user.subscription_expires_at) > t;
 
@@ -109,6 +121,7 @@ function createUsageService({
   /** Marks that the user was shown the paywall and may now send a receipt photo. */
   async function markPaymentPending(userId) {
     if (!enabled) return false;
+    localPending.set(userId, now());
     try {
       await store.upsert(userId, { payment_pending_at: iso(now()) });
       return true;
@@ -127,17 +140,17 @@ function createUsageService({
     if (!enabled) return none;
     try {
       const user = await store.getUser(userId);
-      if (!user) return none;
       const t = now();
+      if (!user) return { ...none, pending: localPendingFresh(userId, t) };
       const subscribed = isSubscribed(user, t);
       const pending =
         !subscribed &&
-        Boolean(user.payment_pending_at) &&
-        t - Date.parse(user.payment_pending_at) < pendingTtlMs;
+        ((Boolean(user.payment_pending_at) && t - Date.parse(user.payment_pending_at) < pendingTtlMs) ||
+          localPendingFresh(userId, t));
       return { pending, subscribed, subscribedUntil: subscribed ? Date.parse(user.subscription_expires_at) : null };
     } catch (err) {
       log.error(`[usage] could not read payment state for user ${userId}:`, err && err.message);
-      return none;
+      return { ...none, pending: localPendingFresh(userId, now()) };
     }
   }
 
@@ -179,6 +192,7 @@ function createUsageService({
     if (!enabled) throw new Error("Monetization is not enabled");
     const expiresAt = now() + days * DAY_MS;
     await store.upsert(userId, { subscription_expires_at: iso(expiresAt), payment_pending_at: null });
+    localPending.delete(userId);
     return expiresAt;
   }
 
@@ -188,6 +202,7 @@ function createUsageService({
    */
   async function rejectPayment(userId) {
     if (!enabled) throw new Error("Monetization is not enabled");
+    localPending.set(userId, now());
     await store.upsert(userId, { payment_pending_at: iso(now()) });
   }
 

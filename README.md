@@ -287,6 +287,11 @@ rather than blocking everyone. Check these, in order:
      wrong: a 404 usually means `supabase/schema.sql` wasn't run, 401/403 a wrong
      key. Use the **service_role** key; an anon/publishable key is reported here
      too.
+   - `404 ... PGRST125 Invalid path specified in request URL` means the request
+     went to a wrong path, almost always because `SUPABASE_URL` contains more than
+     the project URL. It must look like `https://<project-ref>.supabase.co`. The bot
+     now strips quotes, spaces, a trailing slash and a trailing `/rest/v1`, and the
+     error message names the exact endpoint it called, so you can see what it used.
    - Neither line at all means the host is still running an older deploy.
 2. **`/status`** (admin chat only, ignored for everyone else) reports whether
    enforcement is on, whether the database answers, and **your own record**:

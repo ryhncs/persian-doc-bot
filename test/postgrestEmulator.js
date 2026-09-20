@@ -53,7 +53,11 @@ function createPostgrestEmulator() {
     const body = init.body ? JSON.parse(init.body) : undefined;
     requests.push({ method, url: urlString, body, prefer });
 
-    if (!url.pathname.endsWith("/rest/v1/users")) return respond(404, { message: "no such table" });
+    // Like the real gateway: anything but exactly /rest/v1/users (a doubled
+    // /rest/v1, a double slash, ...) is PGRST125, the error seen on staging.
+    if (url.pathname !== "/rest/v1/users") {
+      return respond(404, { code: "PGRST125", details: null, hint: null, message: "Invalid path specified in request URL" });
+    }
     if (!init.headers || !init.headers.apikey || init.headers.Authorization !== `Bearer ${init.headers.apikey}`) {
       return respond(401, { message: "Invalid API key" });
     }

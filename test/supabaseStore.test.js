@@ -128,3 +128,41 @@ test("rejects invalid user ids before making any request", async () => {
   await assert.rejects(() => store.tryIncrement(NaN, 0, "x"), /Invalid telegram_user_id/);
   assert.equal(calls.length, 0);
 });
+
+// PGRST125 "Invalid path specified in request URL" on staging: the env var had
+// a path in it, so the request went to /rest/v1/rest/v1/users.
+test("SUPABASE_URL is normalized: whatever way it was pasted, requests go to <project>/rest/v1/users", async () => {
+  const pasted = [
+    "https://proj.supabase.co",
+    "https://proj.supabase.co/",
+    "https://proj.supabase.co/rest/v1",
+    "https://proj.supabase.co/rest/v1/",
+    "  https://proj.supabase.co/rest/v1/  ",
+    '"https://proj.supabase.co"',
+    "proj.supabase.co",
+  ];
+  for (const url of pasted) {
+    const { fetchImpl, calls } = mockFetch([{ status: 200, body: [] }]);
+    await createSupabaseStore({ url, key: "k", fetchImpl }).getUser(1);
+    assert.equal(
+      calls[0].url,
+      "https://proj.supabase.co/rest/v1/users?telegram_user_id=eq.1&select=*&limit=1",
+      `for ${JSON.stringify(url)}`
+    );
+  }
+});
+
+test("a failed request names the endpoint (never the key) so a wrong URL is obvious", async () => {
+  const { store } = storeWith([
+    { status: 404, body: { code: "PGRST125", message: "Invalid path specified in request URL" } },
+  ]);
+  await assert.rejects(
+    () => store.ping(),
+    (err) => {
+      assert.match(err.message, /https:\/\/proj\.supabase\.co\/rest\/v1\/users failed \(404\)/);
+      assert.match(err.message, /PGRST125/);
+      assert.doesNotMatch(err.message, /service-key/);
+      return true;
+    }
+  );
+});
