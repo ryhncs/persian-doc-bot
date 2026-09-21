@@ -4,6 +4,15 @@ const { handleVoiceMessage } = require("./handlers/voice");
 const { handleCallbackQuery } = require("./handlers/callbacks");
 const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
 const { createSession } = require("./services/sessionStore");
+const { handlePaymentPhoto } = require("./handlers/payment");
+const { mainMenuKeyboard, isMenuLabel, handleMenuButton } = require("./handlers/menu");
+const { runTranslation } = require("./handlers/translate");
+const { runTextToSpeech } = require("./handlers/audioVersion");
+const referral = require("./handlers/referral");
+const { handleStatusCommand, installDegradedAlert } = require("./handlers/admin");
+const { modes, MODES } = require("./services/userMode");
+const { usage } = require("./services/usage");
+const { welcomeMessage, helpMessage } = require("./messages");
 const config = require("./config");
 
 const TOKEN = config.TELEGRAM_BOT_TOKEN;
@@ -19,6 +28,36 @@ if (!config.GROQ_API_KEY) {
   console.warn(
     "GROQ_API_KEY is not set — voice transcription/summarization will reply with a friendly error until it is configured."
   );
+}
+
+if (config.MONETIZATION_ENABLED) {
+  console.log(`Monetization: enabled (${config.FREE_REQUESTS_PER_WEEK} free premium requests/week per user).`);
+} else if (config.MISSING_MONETIZATION_VARS.length < 5) {
+  console.warn(
+    `Monetization is DISABLED (all features unlimited) — missing env vars: ${config.MISSING_MONETIZATION_VARS.join(", ")}.`
+  );
+} else {
+  console.log("Monetization: disabled (no Supabase/payment env vars set) — all features unlimited.");
+}
+
+console.log(
+  config.TTS_ENABLED
+    ? `Audio summaries: enabled (Edge TTS, voice ${config.TTS_VOICE}; subscribers capped at ${config.SUBSCRIBER_AUDIO_PER_DAY}/day).`
+    : "Audio summaries: disabled (TTS_ENABLED=false)."
+);
+
+// A database that is unreachable or misconfigured makes the bot fail open
+// (everyone unlimited), so say so loudly at startup instead of staying quiet.
+if (config.MONETIZATION_ENABLED) {
+  usage.probe().then((result) => {
+    if (result.ok) {
+      console.log("Monetization: Supabase connection OK.");
+    } else {
+      console.error(
+        `Monetization: Supabase check FAILED (${result.error}). Free-tier limits will NOT be enforced until this is fixed.`
+      );
+    }
+  });
 }
 
 // Webhook mode kicks in when WEBHOOK_URL is set (e.g. deploying to
@@ -45,23 +84,42 @@ if (useWebhook) {
   console.log("Bot is running (polling mode)...");
 }
 
-const WELCOME = [
-  "سلام! 👋",
-  "",
-  "هر متن شلوغی رو (کپی‌شده از واتساپ، وردپرس، هر جا) برام بفرست،",
-  "یه فایل Word مرتب، راست‌به‌چپ و با فونت درست برات می‌سازم.",
-  "",
-  "یا یه پیام صوتی برام بفرست (یا فوروارد کن) تا متنش رو پیاده و خلاصه کنم.",
-  "",
-  "یه عکس بفرستی حجمش رو برات کم می‌کنم؛ یه فایل پی‌دی‌اف بفرستی می‌پرسم می‌خوای خلاصه‌ش کنم یا حجمش رو کم کنم.",
-  "",
-  "زیر هر متنی که برات Word می‌سازم دو تا دکمه‌ی ترجمه هم هست: یکی برای ترجمه و ساده‌سازی به فارسی، یکی برای ترجمه به انگلیسی.",
-  "",
-  "کافیه متن، صدا، عکس یا پی‌دی‌اف رو بفرستی — چیز دیگه‌ای لازم نیست.",
-].join("\n");
+installDegradedAlert(bot);
 
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, WELCOME);
+// Invite links point at the bot's real username once Telegram tells us.
+if (typeof bot.getMe === "function") {
+  bot
+    .getMe()
+    .then((me) => referral.setBotUsername(me && me.username))
+    .catch((err) => console.warn("getMe failed; invite links use BOT_USERNAME:", err && err.message));
+}
+
+// "/start" and the deep link "/start ref_<code>" (someone invited this user).
+bot.onText(/^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/, (msg, match) => {
+  modes.clear(msg.from.id);
+  bot
+    .sendMessage(msg.chat.id, welcomeMessage(), { reply_markup: mainMenuKeyboard() })
+    .then(() => referral.handleStartPayload(bot, msg, match && match[1]))
+    .catch((err) => console.error("Unhandled error in /start:", err));
+});
+
+bot.onText(/^\/invite(?:@\w+)?\s*$/, (msg) => {
+  modes.clear(msg.from.id);
+  referral.sendInviteInfo(bot, msg.chat.id, msg.from.id).catch((err) => {
+    console.error("Unhandled error in /invite:", err);
+  });
+});
+
+bot.onText(/^\/help(?:@\w+)?\s*$/, (msg) => {
+  bot.sendMessage(msg.chat.id, helpMessage(), { reply_markup: mainMenuKeyboard() });
+});
+
+// Admin only (silently ignored for anyone else): is enforcement on, does the
+// database answer, and what does the free-tier record for *me* look like.
+bot.onText(/^\/status(?:@\w+)?\s*$/, (msg) => {
+  handleStatusCommand(bot, msg).catch((err) => {
+    console.error("Unhandled error in /status:", err);
+  });
 });
 
 bot.on("message", async (msg) => {
@@ -71,6 +129,30 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const rawText = msg.text;
+
+  // Taps on the persistent menu arrive as ordinary text messages.
+  if (isMenuLabel(rawText)) {
+    handleMenuButton(bot, msg).catch((err) => {
+      console.error("Unhandled error in menu handler:", err);
+    });
+    return;
+  }
+
+  // "🌐 ترجمه و ساده‌سازی متن" was tapped: this text is what to translate.
+  if (modes.take(userId, MODES.TRANSLATE)) {
+    runTranslation(bot, chatId, userId, rawText, "auto").catch((err) => {
+      console.error("Unhandled error in translate handler:", err);
+    });
+    return;
+  }
+  // "🔊 تبدیل متن به صدا" was tapped: this text is what to read aloud.
+  if (modes.take(userId, MODES.TTS_TEXT)) {
+    runTextToSpeech(bot, chatId, userId, rawText).catch((err) => {
+      console.error("Unhandled error in text-to-speech handler:", err);
+    });
+    return;
+  }
+  modes.clear(userId); // any other text means the user moved on
 
   try {
     await bot.sendChatAction(chatId, "upload_document");
@@ -111,22 +193,33 @@ bot.on("message", async (msg) => {
 
 // New: voice-message transcription + summarization flow.
 bot.on("voice", (msg) => {
+  modes.clear(msg.from.id);
   handleVoiceMessage(bot, msg).catch((err) => {
     console.error("Unhandled error in voice handler:", err);
   });
 });
 
 bot.on("audio", (msg) => {
+  modes.clear(msg.from.id);
   handleVoiceMessage(bot, msg).catch((err) => {
     console.error("Unhandled error in voice handler:", err);
   });
 });
 
 // New: image/PDF compression flow.
-bot.on("photo", (msg) => {
-  handlePhotoMessage(bot, msg).catch((err) => {
+// A photo is an image to compress, unless it comes from a user who was just
+// shown the paywall (or the subscription screen): then it is a payment
+// receipt and goes to the admin. Explicitly tapping "🗜 فشرده‌سازی عکس و PDF"
+// first always means compress.
+bot.on("photo", async (msg) => {
+  try {
+    const wantsCompress = modes.take(msg.from.id, MODES.COMPRESS);
+    modes.clear(msg.from.id);
+    if (!wantsCompress && (await handlePaymentPhoto(bot, msg))) return;
+    await handlePhotoMessage(bot, msg);
+  } catch (err) {
     console.error("Unhandled error in photo handler:", err);
-  });
+  }
 });
 
 bot.on("document", (msg) => {

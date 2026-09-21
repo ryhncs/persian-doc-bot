@@ -3,8 +3,8 @@
 //   - a global per-minute counter, so we back off before hitting Groq's per-minute caps
 //
 // Redis/DB upgrade path: replace `dailyUserCounts` with Redis INCR + EXPIRE on
-// key `voicesum:daily:<userId>:<date>`, and `globalMinuteWindows` with the same
-// pattern on `voicesum:min:<kind>`. Needed once this runs across multiple
+// key `kooleh:daily:<userId>:<date>`, and `globalMinuteWindows` with the same
+// pattern on `kooleh:min:<kind>`. Needed once this runs across multiple
 // instances or must survive restarts.
 
 const dailyUserCounts = new Map(); // `${userId}:${dateStr}` -> count

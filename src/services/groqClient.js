@@ -11,9 +11,11 @@ class GroqApiError extends Error {
 }
 
 class GroqRateLimitError extends GroqApiError {
-  constructor(message) {
+  // retryAfterMs: from Groq's Retry-After header when present, else undefined.
+  constructor(message, retryAfterMs) {
     super(message, 429);
     this.name = "GroqRateLimitError";
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -47,7 +49,12 @@ async function groqFetch(path, { timeoutMs = DEFAULT_TIMEOUT_MS, ...options } = 
   }
 
   if (res.status === 429) {
-    throw new GroqRateLimitError("Groq rate limit exceeded (429)");
+    const header = res.headers && typeof res.headers.get === "function" ? res.headers.get("retry-after") : null;
+    const seconds = header ? Number(header) : NaN;
+    throw new GroqRateLimitError(
+      "Groq rate limit exceeded (429)",
+      Number.isFinite(seconds) ? Math.ceil(seconds * 1000) : undefined
+    );
   }
 
   if (!res.ok) {

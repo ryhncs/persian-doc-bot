@@ -21,8 +21,8 @@ ffmpeg.setFfmpegPath(ffmpegPath);
  */
 async function convertOggToWav(inputBuffer) {
   const tmpId = crypto.randomBytes(6).toString("hex");
-  const inputPath = path.join(os.tmpdir(), `voicesum-${tmpId}.oga`);
-  const outputPath = path.join(os.tmpdir(), `voicesum-${tmpId}.wav`);
+  const inputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.oga`);
+  const outputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.wav`);
 
   await fs.writeFile(inputPath, inputBuffer);
 
@@ -65,4 +65,36 @@ async function convertOggToWav(inputBuffer) {
   }
 }
 
-module.exports = { convertOggToWav };
+/**
+ * Transcodes any audio buffer (the TTS service returns MP3) to OGG/Opus mono,
+ * the format Telegram plays as a voice note via sendVoice. 32 kbps is plenty
+ * for speech and keeps the file small.
+ */
+async function convertToOggOpus(inputBuffer) {
+  const tmpId = crypto.randomBytes(6).toString("hex");
+  const inputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.in`);
+  const outputPath = path.join(os.tmpdir(), `kooleh-${tmpId}.ogg`);
+
+  await fs.writeFile(inputPath, inputBuffer);
+
+  try {
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .noVideo()
+        .audioCodec("libopus")
+        .audioBitrate("32k")
+        .audioChannels(1)
+        .audioFrequency(48000)
+        .format("ogg")
+        .on("end", resolve)
+        .on("error", reject)
+        .save(outputPath);
+    });
+    return await fs.readFile(outputPath);
+  } finally {
+    await fs.rm(inputPath, { force: true });
+    await fs.rm(outputPath, { force: true });
+  }
+}
+
+module.exports = { convertOggToWav, convertToOggOpus };

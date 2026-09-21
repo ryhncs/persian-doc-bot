@@ -1,0 +1,176 @@
+// Thin Supabase (PostgREST) client for the `users` table, using plain fetch —
+// same "no SDK" approach as groqClient.js. See supabase/schema.sql.
+//
+// The try* methods are conditional updates (compare-and-set): each PATCH
+// carries a filter describing the state the caller last read, and returns the
+// updated row only if that filter still matched. usage.js retries when they
+// return null, which is what keeps two concurrent requests from the same user
+// from both squeezing under the weekly limit.
+
+const DEFAULT_TIMEOUT_MS = 10 * 1000;
+
+function assertUserId(id) {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`Invalid telegram_user_id: ${id}`);
+  }
+  return id;
+}
+
+// The table has RLS on with no policies, so only a service/secret key works. A
+// public (anon/publishable) key reads back empty and is refused on writes,
+// which would otherwise look like "everything works, nobody is limited".
+function keyWarnings(key) {
+  const warnings = [];
+  if (/^sb_publishable_/.test(key)) {
+    warnings.push("SUPABASE_KEY is a publishable key; use the service_role / secret key");
+  } else if (key.split(".").length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString("utf8"));
+      if (payload.role === "anon") warnings.push("SUPABASE_KEY is the anon key; use the service_role key");
+    } catch {
+      // not a decodable JWT; nothing to say
+    }
+  }
+  return warnings;
+}
+
+// The env var is pasted by hand, and Supabase shows several URLs that look
+// alike. Accept the project URL however it arrives (quotes, spaces, no scheme,
+// trailing slash, or already ending in /rest/v1) and return the bare project
+// URL. A doubled /rest/v1 is what makes PostgREST answer PGRST125 "Invalid path
+// specified in request URL".
+function normalizeSupabaseUrl(raw) {
+  let url = String(raw || "").trim().replace(/^["']+|["']+$/g, "").trim();
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  return url.replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, "");
+}
+
+function createSupabaseStore({
+  url,
+  key,
+  fetchImpl = (...args) => globalThis.fetch(...args),
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+}) {
+  const base = `${normalizeSupabaseUrl(url)}/rest/v1/users`;
+
+  async function request(method, query, { body, prefer } = {}) {
+    const res = await fetchImpl(`${base}${query}`, {
+      method,
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        ...(prefer ? { Prefer: prefer } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      // Name the endpoint (never the key) so a wrong SUPABASE_URL is obvious from /status.
+      throw new Error(`Supabase ${method} ${base} failed (${res.status}): ${detail.slice(0, 300)}`);
+    }
+
+    const text = await res.text();
+    return text ? JSON.parse(text) : [];
+  }
+
+  const enc = encodeURIComponent;
+
+  return {
+    // Cheap read used at startup and by /status to prove the URL, key and table work.
+    async ping() {
+      await request("GET", "?select=telegram_user_id&limit=1");
+      return { warnings: keyWarnings(key) };
+    },
+
+    async getUser(id) {
+      assertUserId(id);
+      const rows = await request("GET", `?telegram_user_id=eq.${id}&select=*&limit=1`);
+      return rows[0] || null;
+    },
+
+    // Inserts the row unless it already exists (returns null in that case).
+    async createUser(row) {
+      assertUserId(row.telegram_user_id);
+      const rows = await request("POST", "?on_conflict=telegram_user_id", {
+        body: row,
+        prefer: "return=representation,resolution=ignore-duplicates",
+      });
+      return rows[0] || null;
+    },
+
+    // Insert-or-merge: only the given fields change on an existing row; a new
+    // row gets the column defaults for everything else.
+    async upsert(id, fields) {
+      assertUserId(id);
+      const rows = await request("POST", "?on_conflict=telegram_user_id", {
+        body: { telegram_user_id: id, ...fields },
+        prefer: "return=representation,resolution=merge-duplicates",
+      });
+      return rows[0] || null;
+    },
+
+    // count -> count + 1, only if the count is still what the caller read and
+    // the window hasn't expired in the meantime.
+    async tryIncrement(id, expectedCount, nowIso) {
+      assertUserId(id);
+      const rows = await request(
+        "PATCH",
+        `?telegram_user_id=eq.${id}&weekly_request_count=eq.${expectedCount}&week_reset_at=gt.${enc(nowIso)}`,
+        { body: { weekly_request_count: expectedCount + 1 }, prefer: "return=representation" }
+      );
+      return rows[0] || null;
+    },
+
+    // Start a fresh window (count = 1, this request), only if the old window is
+    // still expired — so of two racing requests, exactly one performs the reset.
+    async tryResetWindow(id, nowIso, newResetAtIso) {
+      assertUserId(id);
+      const rows = await request(
+        "PATCH",
+        `?telegram_user_id=eq.${id}&week_reset_at=lte.${enc(nowIso)}`,
+        {
+          body: { weekly_request_count: 1, week_reset_at: newResetAtIso },
+          prefer: "return=representation",
+        }
+      );
+      return rows[0] || null;
+    },
+
+    // General compare-and-set: applies `fields` to the row only if every column
+    // in `expected` still has the given value (null means "is null"). Returns
+    // the updated row, or null if the row changed (or is missing) since the
+    // caller read it. The referral and coupon bookkeeping is built on this.
+    async tryUpdate(id, expected, fields) {
+      assertUserId(id);
+      let query = `?telegram_user_id=eq.${id}`;
+      for (const [column, value] of Object.entries(expected)) {
+        if (!/^[a-z_]+$/.test(column)) throw new Error(`Invalid column name: ${column}`);
+        query += value === null ? `&${column}=is.null` : `&${column}=eq.${enc(String(value))}`;
+      }
+      const rows = await request("PATCH", query, { body: fields, prefer: "return=representation" });
+      return rows[0] || null;
+    },
+
+    async getUserByReferralCode(code) {
+      if (!/^[A-Za-z0-9]{4,16}$/.test(String(code))) return null;
+      const rows = await request("GET", `?referral_code=eq.${enc(code)}&select=*&limit=1`);
+      return rows[0] || null;
+    },
+
+    async tryDecrement(id, expectedCount, nowIso) {
+      assertUserId(id);
+      const rows = await request(
+        "PATCH",
+        `?telegram_user_id=eq.${id}&weekly_request_count=eq.${expectedCount}&week_reset_at=gt.${enc(nowIso)}`,
+        { body: { weekly_request_count: expectedCount - 1 }, prefer: "return=representation" }
+      );
+      return rows[0] || null;
+    },
+  };
+}
+
+module.exports = { createSupabaseStore, normalizeSupabaseUrl };

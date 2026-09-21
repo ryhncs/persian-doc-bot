@@ -1,18 +1,20 @@
 {
-  "name": "voicesum-bot",
+  "name": "kooleh-bot",
   "version": "1.1.0",
-  "description": "Telegram bot: formats messy pasted text into RTL Persian Word docs, and transcribes/summarizes long voice messages (VoiceSum) with optional Word export",
+  "description": "Kooleh (کوله), a Persian student-assistant Telegram bot: voice/PDF summarization, translate & simplify, Word export and file compression, with a free weekly quota and manual card-to-card subscriptions",
   "main": "src/bot.js",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "start": "node src/bot.js"
+    "start": "node src/bot.js",
+    "test": "node --test"
   },
   "dependencies": {
     "docx": "^9.0.0",
     "dotenv": "^16.4.5",
+    "edge-tts-universal": "1.4.0",
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.3",
     "node-telegram-bot-api": "^0.66.0",
