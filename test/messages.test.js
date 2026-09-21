@@ -10,6 +10,7 @@ const EXPECTED_WELCOME = [
   "من اینجام تا تو درس خوندنت کمکت کنم: می‌تونم پیام صوتیت رو خلاصه کنم، جزوه‌ی PDF رو براوت خلاصه کنم، یه متن رو ترجمه و ساده کنم، یا حجم عکس و PDF رو کوچیک کنم.",
   "هر هفته ۳ تا درخواست رایگان داری. برای استفاده‌ی بیشتر هم اشتراک ماهانه داریم، فقط ۱۲۰ هزار تومن.",
   "از منوی پایین یکی از گزینه‌ها رو انتخاب کن و شروع کن.",
+  "هر وقت خواستی /help رو بفرست تا لیست کامل کارهایی که ازم برمیاد رو ببینی.",
 ].join("\n");
 
 test("/start text is exactly the requested wording", () => {
@@ -21,9 +22,15 @@ test("/start text has no em or en dashes", () => {
   assert.doesNotMatch(welcomeMessage(), /[–—]/);
 });
 
-test("/start text is four lines and mentions the 3 free requests and the price", () => {
+test("/start text tells users about /help on its last line", () => {
   const lines = welcomeMessage().split("\n");
-  assert.equal(lines.length, 4);
+  assert.equal(lines.at(-1), "هر وقت خواستی /help رو بفرست تا لیست کامل کارهایی که ازم برمیاد رو ببینی.");
+  assert.match(lines.at(-1), /\/help/);
+});
+
+test("/start text is five lines and mentions the 3 free requests and the price", () => {
+  const lines = welcomeMessage().split("\n");
+  assert.equal(lines.length, 5);
   assert.match(lines[2], /۳ تا درخواست رایگان/);
   assert.match(lines[2], /۱۲۰ هزار تومن/);
 });
