@@ -7,7 +7,7 @@ input.
 Everything starts from a persistent menu under the message box (shown after
 `/start`): **🎙 خلاصه پیام صوتی**, **📄 خلاصه جزوه PDF**, **🌐 ترجمه و
 ساده‌سازی متن**, **🗜 فشرده‌سازی عکس و PDF**, **💳 خرید اشتراک** and
-**🎁 دعوت دوستان**. See [The menu](#the-menu).
+**🎁 دعوت دوستان** and **🔊 تبدیل متن به صدا**. See [The menu](#the-menu).
 
 1. **Word export** — send any messy pasted text, get back a clean, RTL,
    properly fonted `.docx` file. Always free.
@@ -87,6 +87,7 @@ text).
 | `TTS_ENABLED`                 | no       | `true`                     | Set `false` to hide the "🔊 دریافت نسخه صوتی" button (see [Audio versions](#audio-versions-of-summaries)). |
 | `TTS_VOICE`                   | no       | `fa-IR-DilaraNeural`       | Edge voice; the other Persian voice is `fa-IR-FaridNeural` (male). |
 | `SUBSCRIBER_AUDIO_PER_DAY`    | no       | `15`                       | Daily cap on audio versions for users who aren't paying from the weekly quota (subscribers). |
+| `TTS_TEXT_MAX_CHARS`            | no       | `4000`                     | Longest text "🔊 تبدیل متن به صدا" accepts. Measured Persian speech is about 12 characters per second, so 4,000 characters is at most about 5.5 minutes of audio (under the 6-minute target) and just under Telegram's 4,096-character message limit. |
 
 "for limits" = enforcement only switches on when **all five** of
 `SUPABASE_URL`, `SUPABASE_KEY`, `SUBSCRIPTION_PRICE_TOMAN`, `CARD_NUMBER` and
@@ -131,7 +132,7 @@ src/
     payment.js                Paywall, receipt-photo forwarding to the admin, ✅/❌ approval buttons
     admin.js                   Admin-only /status and the "database is failing" alert
     referral.js                 Invite link/status (🎁 دعوت دوستان, /invite), /start ref_<code>, bonus and coupon notices
-    audioVersion.js             The "🔊 دریافت نسخه صوتی" button: gate, daily cap, synthesize, send voice, refund on failure
+    audioVersion.js             The audio pipeline (gate, daily cap, synthesize, send voice, refund on failure) behind the "🔊 دریافت نسخه صوتی" button and "🔊 تبدیل متن به صدا"
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -152,6 +153,7 @@ src/
     supabaseStore.js                    Supabase (PostgREST) client for the `users` table, plain fetch
     referrals.js                        Referral codes, attribution, bonus payout on first delivered request, coupons (fails open)
     tts.js                              Summary text → speech: text prep, Edge TTS (free, unofficial), MP3 → OGG/Opus
+    textDirection.js                    Picks the translate direction (Persian -> English, else -> Persian) by counting words per script
     dailyCap.js                         Rolling 24 h per-user cap (subscriber audio)
   utils/
     textChunk.js                     Splits long text into Telegram-safe message chunks
@@ -186,17 +188,18 @@ restarts or run across multiple instances.
 `/start` shows the welcome text with a persistent reply keyboard (buttons
 under the message box, not attached to a message); `/help` shows the same
 keyboard again. Each button is an ordinary text message, so `bot.js` checks for
-the six labels before treating text as "convert this to Word". `/invite` does
+the seven labels before treating text as "convert this to Word". `/invite` does
 the same as **🎁 دعوت دوستان**.
 
 | Button | What it does |
 | --- | --- |
 | 🎙 خلاصه پیام صوتی | Asks for a voice message; sending one runs the voice summary as always. |
 | 📄 خلاصه جزوه PDF | Your next PDF is summarized directly (no "summarize or compress?" question). |
-| 🌐 ترجمه و ساده‌سازی متن | Your next text is translated to Persian and simplified directly (no Word file). |
+| 🌐 ترجمه و ساده‌سازی متن | Your next text is translated directly (no Word file), in the direction detected from the text: Persian to English, anything else to simplified Persian. |
 | 🗜 فشرده‌سازی عکس و PDF | Your next photo or PDF is compressed directly. |
 | 💳 خرید اشتراک | Price, card number and receipt instructions (or the subscription end date if already subscribed), plus your discount price if you hold a coupon. |
 | 🎁 دعوت دوستان | Your invite link, the rules, and your status (successful referrals, coupons, bonus requests). |
+| 🔊 تبدیل متن به صدا | Your next text is read aloud and sent back as a voice message (see [Text to speech](#text-to-speech-free-text)). |
 
 These "next message" choices last 10 minutes, are used once, and are dropped
 if you send anything that doesn't match (see `src/services/userMode.js`). With no
@@ -271,6 +274,27 @@ Telegram voice message.
   session store (6 hours, and not across a restart; then it says the session
   expired). English terms inside Persian text are read with a Persian accent.
   Set `TTS_ENABLED=false` to hide the button.
+
+## Text to speech (free text)
+
+**🔊 تبدیل متن به صدا** asks for a text and sends it back as a voice message,
+using the same Edge TTS pipeline as the summary audio (`produceAudio()` in
+`src/handlers/audioVersion.js`).
+
+- **Same rules as every billable action.** One request against the weekly free
+  quota (refunded if no audio is delivered), one conversion per user at a time,
+  and for subscribers the same daily cap (`SUBSCRIBER_AUDIO_PER_DAY`, shared with
+  the summary audio button). It also qualifies an invited user's first request.
+- **Length limit.** Measured on the real Edge `fa-IR-DilaraNeural` voice: about
+  12 characters per second for casual Persian with digits and 13.6 for plain
+  prose (a 3,208-character text became 236 s of audio and took 37 s to make). To
+  stay under about 6 minutes the limit is `TTS_TEXT_MAX_CHARS` = 4,000
+  characters (roughly 5.5 minutes at the slow rate). Longer text is refused with a
+  message that says how long it was and what the limit is, costs nothing, and the
+  user can just send a shorter one. Telegram itself caps a single message at
+  4,096 characters, so the limit rarely needs to bite.
+- **Cleanup.** The text is prepared for speech first (emoji, markdown symbols and
+  symbol-only lines removed); text with nothing readable is refused.
 
 ## Referrals and discount coupons
 
@@ -452,6 +476,18 @@ as a Blueprint so this needs no manual URL configuration:
    traffic and take ~1 minute to wake back up on the next Telegram update.
 
 ## Translate & simplify
+
+**The menu button (🌐) works in both directions and detects which one applies**
+(`src/services/textDirection.js`): if most of the words are Persian (or another
+Arabic-script language) the text is translated **to English**; anything else
+(English, French, Russian, ...) is translated **to simplified Persian**. Words are
+counted, not letters, so a Persian sentence with a few long English terms is still
+Persian, and an exact 50/50 split counts as Persian. Text with no letters defaults
+to simplified Persian. (The menu button once always ran the "to Persian" prompt,
+which is why Persian text was never translated to English; `test/wiring.test.js`
+now covers both directions.)
+
+The two inline buttons below still force a direction whatever the text is.
 
 Every text message that gets converted to a `.docx` (feature 1) also gets a
 follow-up message with two buttons, both hitting the same Groq model used

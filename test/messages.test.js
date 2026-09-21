@@ -33,3 +33,62 @@ test("/help mentions the menu and no longer uses em dashes", () => {
   assert.match(help, /منوی پایین/);
   assert.doesNotMatch(help, /[–—]/);
 });
+
+// --- /help ------------------------------------------------------------------
+process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || "test-key";
+const config = require("../src/config");
+
+test("/help lists every feature of the bot", () => {
+  const help = helpMessage();
+  const topics = {
+    "voice summary": /🎙 خلاصه پیام صوتی/,
+    "PDF summary": /📄 خلاصه جزوه PDF/,
+    "translate, both directions": /فارسی باشه به انگلیسی ترجمه می‌شه، انگلیسی/,
+    "language is detected": /زبان رو خودم تشخیص می‌دم/,
+    "compression": /🗜 فشرده‌سازی عکس و PDF/,
+    "text to speech": /🔊 تبدیل متن به صدا/,
+    "audio version of summaries": /دریافت نسخه صوتی/,
+    "referrals": /🎁 دعوت دوستان/,
+    "coupon": /کوپن/,
+    "how to buy": /💳 خرید اشتراک.*کارت‌به‌کارت.*رسید/,
+    "Word export": /Word/,
+  };
+  for (const [name, pattern] of Object.entries(topics)) assert.match(help, pattern, `/help should mention: ${name}`);
+});
+
+test("/help has no em dashes, en dashes or other long dashes, in any configuration", () => {
+  const original = { ...config };
+  try {
+    for (const monetization of [false, true]) {
+      config.MONETIZATION_ENABLED = monetization;
+      config.ADMIN_CONTACT = monetization ? "@kooleh_admin" : "";
+      config.SUBSCRIPTION_PRICE_TOMAN = "120000";
+      assert.doesNotMatch(helpMessage(), /[\u2010-\u2015\u2212]/);
+    }
+  } finally {
+    Object.assign(config, original);
+  }
+});
+
+test("/help is concise: fits comfortably in one Telegram message", () => {
+  config.MONETIZATION_ENABLED = true;
+  try {
+    assert.ok(helpMessage().length < 2500, `help is ${helpMessage().length} chars`);
+  } finally {
+    config.MONETIZATION_ENABLED = false;
+  }
+});
+
+test("/help states the text-to-speech limit from config and the subscription price when limits are on", () => {
+  const original = { ...config };
+  try {
+    config.MONETIZATION_ENABLED = true;
+    config.SUBSCRIPTION_PRICE_TOMAN = "120000";
+    const help = helpMessage();
+    assert.match(help, /۴٬۰۰۰ کاراکتر/);
+    assert.match(help, /۱۲۰٬۰۰۰ تومان/);
+    assert.match(help, /هر هفته ۳ درخواست رایگان/);
+  } finally {
+    Object.assign(config, original);
+  }
+});

@@ -8,6 +8,7 @@ const MODES = {
   TRANSLATE: "translate", // next text message -> translate & simplify
   SUMMARIZE_PDF: "summarizePdf", // next PDF -> summarize
   COMPRESS: "compress", // next photo or PDF -> compress
+  TTS_TEXT: "ttsText", // next text message -> read it aloud as a voice message
 };
 
 const MODE_TTL_MS = 10 * 60 * 1000;

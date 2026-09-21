@@ -30,12 +30,13 @@ test("menu labels are exactly the requested wording (ZWNJ included)", () => {
   assert.equal(MENU.SUBSCRIBE, "💳 خرید اشتراک");
 });
 
-test("the keyboard is a persistent reply keyboard with the six buttons, not inline buttons", () => {
+test("the keyboard is a persistent reply keyboard with the seven buttons, not inline buttons", () => {
   const kb = mainMenuKeyboard();
   assert.equal(kb.is_persistent, true);
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.inline_keyboard, undefined);
-  assert.deepEqual(kb.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE]);
+  assert.deepEqual(kb.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE, MENU.TTS]);
+  assert.equal(MENU.TTS, "🔊 تبدیل متن به صدا");
   assert.equal(MENU.INVITE, "🎁 دعوت دوستان");
 });
 
@@ -65,7 +66,9 @@ test("📄 asks for a PDF and makes the next PDF a summary request", async () =>
 test("🌐 asks for a text and makes the next text a translate request", async () => {
   const bot = mockBot();
   await handleMenuButton(bot, tap(MENU.TRANSLATE));
-  assert.match(bot.sent[0].text, /متنی که می‌خوای ترجمه و ساده بشه/);
+  assert.match(bot.sent[0].text, /متنی که می‌خوای ترجمه بشه/);
+  assert.match(bot.sent[0].text, /فارسیه، به انگلیسی/, "says both directions");
+  assert.match(bot.sent[0].text, /زبان رو خودم تشخیص می‌دم/);
   assert.equal(modes.peek(7), MODES.TRANSLATE);
   modes.clear(7);
 });
@@ -92,4 +95,14 @@ test("modes are per user", async () => {
   assert.equal(modes.peek(1), MODES.TRANSLATE);
   assert.equal(modes.peek(2), null);
   modes.clear(1);
+});
+
+test("🔊 asks for the text to read aloud, states the limit, and makes the next text a speech request", async () => {
+  const bot = mockBot();
+  await handleMenuButton(bot, tap(MENU.TTS));
+  assert.match(bot.sent[0].text, /متنی که می‌خوای به صدا تبدیل بشه/);
+  assert.match(bot.sent[0].text, /۴٬۰۰۰ کاراکتر/);
+  assert.match(bot.sent[0].text, /۶ دقیقه/);
+  assert.equal(modes.peek(7), MODES.TTS_TEXT);
+  modes.clear(7);
 });

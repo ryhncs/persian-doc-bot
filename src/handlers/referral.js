@@ -81,7 +81,7 @@ function createReferralHandlers({ usage, config, log = console }) {
     } else if (result.reason === "self") {
       await bot.sendMessage(chatId, "این لینک دعوت خودته 😄 برای دوستات بفرستش.");
     } else if (result.reason === "not_new" || result.reason === "already_referred") {
-      await bot.sendMessage(chatId, "لینک دعوت فقط برای کاربرهای جدید کاره، ولی می‌تونی لینک خودت رو از «🎁 دعوت دوستان» بگیری.");
+      await bot.sendMessage(chatId, "لینک دعوت فقط برای کاربرهای جدید هستش، ولی می‌تونی لینک خودت رو از «🎁 دعوت دوستان» بگیری.");
     }
   }
 

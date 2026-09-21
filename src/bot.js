@@ -7,6 +7,7 @@ const { createSession } = require("./services/sessionStore");
 const { handlePaymentPhoto } = require("./handlers/payment");
 const { mainMenuKeyboard, isMenuLabel, handleMenuButton } = require("./handlers/menu");
 const { runTranslation } = require("./handlers/translate");
+const { runTextToSpeech } = require("./handlers/audioVersion");
 const referral = require("./handlers/referral");
 const { handleStatusCommand, installDegradedAlert } = require("./handlers/admin");
 const { modes, MODES } = require("./services/userMode");
@@ -139,8 +140,15 @@ bot.on("message", async (msg) => {
 
   // "🌐 ترجمه و ساده‌سازی متن" was tapped: this text is what to translate.
   if (modes.take(userId, MODES.TRANSLATE)) {
-    runTranslation(bot, chatId, userId, rawText, "translate").catch((err) => {
+    runTranslation(bot, chatId, userId, rawText, "auto").catch((err) => {
       console.error("Unhandled error in translate handler:", err);
+    });
+    return;
+  }
+  // "🔊 تبدیل متن به صدا" was tapped: this text is what to read aloud.
+  if (modes.take(userId, MODES.TTS_TEXT)) {
+    runTextToSpeech(bot, chatId, userId, rawText).catch((err) => {
+      console.error("Unhandled error in text-to-speech handler:", err);
     });
     return;
   }

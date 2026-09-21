@@ -88,6 +88,7 @@ const fakeLibPath = require.resolve("node-telegram-bot-api");
 require.cache[fakeLibPath] = { id: fakeLibPath, filename: fakeLibPath, loaded: true, exports: FakeBot };
 
 // --- fakes for pdf helpers, the transcriber and the TTS synthesizer ---------------------
+const realTts = require("../src/services/tts"); // keep the real text preparation; only synthesis is faked
 const tts = { calls: [], fail: false, gate: null };
 for (const [file, exports] of [
   ["../src/services/pdfText", { extractPdfText: async () => ({ text: "A short lecture note about gradient descent and learning rates.", numPages: 1 }) }],
@@ -96,6 +97,7 @@ for (const [file, exports] of [
   [
     "../src/services/tts",
     {
+      ...realTts,
       synthesizeSpeech: async (text) => {
         tts.calls.push(text);
         if (tts.gate) await tts.gate;
@@ -137,7 +139,7 @@ globalThis.fetch = async (url, init = {}) => {
       ok: true,
       status: 200,
       headers: { get: () => null },
-      json: async () => ({ choices: [{ message: { content: "نتیجه‌ی آزمایشی" }, finish_reason: "stop" }], usage: { total_tokens: 500 } }),
+      json: async () => ({ choices: [{ message: { content: "نتیجه‌ی آزمایشی" }, finish_reason: "stop" }], usage: { total_tokens: 20 } }),
       text: async () => "",
     };
   }
@@ -585,4 +587,179 @@ test("the invite/audio/coupon wiring left the free tools alone: compression stil
   const docsBefore = bot.documents.length;
   sendPhoto(950);
   await waitFor(() => bot.documents.length === docsBefore + 1, "compressed");
+});
+
+// =====================================================================================
+// 🔊 تبدیل متن به صدا (free text to speech)
+// =====================================================================================
+async function tapTts(id) {
+  const before = countTo(id);
+  say(id, MENU.TTS);
+  await waitFor(() => countTo(id) === before + 1, "text-to-speech prompt");
+}
+const voicesTo = (id) => bot.voices.filter((v) => v.chatId === id);
+
+test("🔊 asks for the text, states the limit, then reads it aloud as a voice message (one billable request)", async () => {
+  await tapTts(1301);
+  assert.match(lastTo(1301).text, /حداکثر حدود ۴٬۰۰۰ کاراکتر/);
+  assert.match(lastTo(1301).text, /یه درخواست از سهمیه‌ات حساب می‌شه/);
+
+  const callsBefore = tts.calls.length;
+  say(1301, "سلام، این یک متن آزمایشی برای تبدیل به صدا است.");
+  await waitFor(() => voicesTo(1301).length === 1, "voice message");
+
+  const voice = voicesTo(1301)[0];
+  assert.equal(voice.fileOpts.filename, "speech.ogg");
+  assert.equal(voice.fileOpts.contentType, "audio/ogg");
+  assert.equal(voice.buffer.toString(), "OggS-fake-opus-audio");
+  assert.equal(tts.calls.length, callsBefore + 1);
+  assert.equal(tts.calls.at(-1), "سلام، این یک متن آزمایشی برای تبدیل به صدا است.");
+  assert.equal(row(1301).weekly_request_count, 1, "counted like any billable action");
+  await waitFor(() => bot.deleted.some((d) => d.chatId === 1301), "the processing message is cleaned up");
+  assert.ok(bot.messagesTo(1301).some((m) => /در حال تبدیل متن به صدا/.test(m.text)));
+});
+
+test("the tap is one-shot: the next plain text goes back to the Word export", async () => {
+  await tapTts(1302);
+  say(1302, "این متن به صدا تبدیل می‌شه.");
+  await waitFor(() => voicesTo(1302).length === 1, "audio");
+  const docsBefore = bot.documents.filter((d) => d.chatId === 1302).length;
+  say(1302, "و این یکی فقط یه متن معمولیه.");
+  await waitFor(() => bot.documents.filter((d) => d.chatId === 1302).length === docsBefore + 1, "word export");
+  assert.equal(voicesTo(1302).length, 1);
+});
+
+test("the limit: 4,000 characters are accepted, more are refused with a clear message and cost nothing", async () => {
+  await tapTts(1310);
+  const callsBefore = tts.calls.length;
+  say(1310, "الف ".repeat(1001)); // 4,004 characters
+  await waitFor(() => /خیلی طولانیه/.test(lastTo(1310).text), "too-long message");
+  const msg = lastTo(1310).text;
+  assert.match(msg, /۴٬۰۰۴ کاراکتر/, "says how long the text was");
+  assert.match(msg, /حداکثر حدود ۴٬۰۰۰ کاراکتر/, "says the limit");
+  assert.match(msg, /۶ دقیقه/);
+  assert.equal(tts.calls.length, callsBefore, "nothing synthesized");
+  assert.equal(row(1310), undefined, "nothing charged (no billable request was made)");
+
+  // Still waiting for a text: a shorter one now works, right at the limit.
+  say(1310, "ب".repeat(4000));
+  await waitFor(() => voicesTo(1310).length === 1, "audio for a 4000-character text");
+  assert.equal(row(1310).weekly_request_count, 1);
+});
+
+test("text with nothing to read (only emoji or symbols) is refused, and the user can try again", async () => {
+  await tapTts(1320);
+  say(1320, "🎒🎒 ---");
+  await waitFor(() => /چیزی برای خوندن پیدا نکردم/.test(lastTo(1320).text), "nothing to read");
+  assert.equal(voicesTo(1320).length, 0);
+  say(1320, "حالا یه متن درست.");
+  await waitFor(() => voicesTo(1320).length === 1, "audio");
+});
+
+test("if synthesis fails the user is told and the request is refunded", async () => {
+  await tapTts(1330);
+  tts.fail = true;
+  say(1330, "این متن قرار است شکست بخورد.");
+  await waitFor(() => bot.messagesTo(1330).some((m) => /ساخت نسخه صوتی با مشکل مواجه شد/.test(m.text)), "error");
+  tts.fail = false;
+  assert.equal(voicesTo(1330).length, 0);
+  await waitFor(() => row(1330).weekly_request_count === 0, "refund");
+});
+
+test("3 free requests a week apply: the 4th billable action (here text to speech) hits the paywall", async () => {
+  await translate(1340);
+  await translate(1340);
+  await tapTts(1340);
+  say(1340, "سومین درخواست.");
+  await waitFor(() => voicesTo(1340).length === 1, "third request, audio");
+  assert.equal(row(1340).weekly_request_count, 3);
+
+  await tapTts(1340);
+  const callsBefore = tts.calls.length;
+  const before = countTo(1340);
+  say(1340, "چهارمین درخواست.");
+  await waitFor(() => countTo(1340) === before + 1, "paywall");
+  assert.match(lastTo(1340).text, /سهمیه‌ی رایگان/);
+  assert.equal(voicesTo(1340).length, 1);
+  assert.equal(tts.calls.length, callsBefore);
+});
+
+test("subscribers share ONE daily cap of 15 between summary audio and text to speech", async () => {
+  const keyboard = await pdfSummary(1350);
+  row(1350).subscription_expires_at = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+
+  for (let i = 1; i <= 10; i++) {
+    tap(1350, 1350, audioData(keyboard));
+    await waitFor(() => voicesTo(1350).length === i, `summary audio #${i}`);
+  }
+  for (let i = 11; i <= 15; i++) {
+    await tapTts(1350);
+    say(1350, `متن شماره ${i}.`);
+    await waitFor(() => voicesTo(1350).length === i, `text audio #${i}`);
+  }
+  assert.equal(row(1350).weekly_request_count, 1, "a subscriber's audio never touches the weekly counter");
+
+  await tapTts(1350);
+  const before = countTo(1350);
+  say(1350, "شانزدهمین.");
+  await waitFor(() => countTo(1350) === before + 1, "cap message");
+  assert.match(lastTo(1350).text, /سقف ۱۵ نسخه‌ی صوتی در روز/);
+  assert.equal(voicesTo(1350).length, 15, "no 16th audio");
+});
+
+test("a second text while one is still being converted is refused (one conversion at a time)", async () => {
+  let release;
+  tts.gate = new Promise((resolve) => (release = resolve));
+  await tapTts(1360);
+  say(1360, "اولین متن که طول می‌کشد.");
+  await waitFor(() => tts.calls.at(-1) === "اولین متن که طول می‌کشد.", "first conversion running");
+
+  await tapTts(1360);
+  const before = countTo(1360);
+  say(1360, "دومین متن همزمان.");
+  await waitFor(() => countTo(1360) === before + 1, "busy message");
+  assert.match(lastTo(1360).text, /از قبل در حال ساخته شدنه/);
+  assert.equal(row(1360).weekly_request_count, 1, "the refused text cost nothing");
+
+  tts.gate = null;
+  release();
+  await waitFor(() => voicesTo(1360).length === 1, "first audio delivered");
+});
+
+test("an invited user's first request can be text to speech: it qualifies the referral", async () => {
+  const code = await inviteCodeOf(1370);
+  say(1371, `/start ref_${code}`);
+  await waitFor(() => countTo(1371) === 2, "attribution");
+  await tapTts(1371);
+  say(1371, "اولین درخواست من یک متن به صدا است.");
+  await waitFor(() => voicesTo(1371).length === 1, "audio");
+  await waitFor(() => row(1371).bonus_requests === 2 && row(1370).bonus_requests === 2, "both bonuses");
+  assert.equal(row(1370).successful_referrals, 1);
+});
+
+test("TTS switched off: the menu button says so, and no mode is left waiting", async () => {
+  const original = config.TTS_ENABLED;
+  try {
+    config.TTS_ENABLED = false;
+    const before = countTo(1380);
+    say(1380, MENU.TTS);
+    await waitFor(() => countTo(1380) === before + 1, "reply");
+    assert.match(lastTo(1380).text, /فعلاً روی این بات فعال نیست/);
+    const docsBefore = bot.documents.filter((d) => d.chatId === 1380).length;
+    say(1380, "این باید ورد بشه.");
+    await waitFor(() => bot.documents.filter((d) => d.chatId === 1380).length === docsBefore + 1, "word export");
+  } finally {
+    config.TTS_ENABLED = original;
+  }
+});
+
+test("DATABASE DOWN: text to speech still works (fail open)", async () => {
+  net.dbDown = true;
+  try {
+    await tapTts(1390);
+    say(1390, "متن در زمان قطعی دیتابیس.");
+    await waitFor(() => voicesTo(1390).length === 1, "audio while the database is down");
+  } finally {
+    net.dbDown = false;
+  }
 });

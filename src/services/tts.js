@@ -16,7 +16,8 @@ const { convertToOggOpus } = require("./audioConvert");
 // Generous for a summary (a few thousand characters); anything longer is
 // refused instead of tying up the synthesizer for minutes.
 const MAX_SPEECH_CHARS = 12000;
-const SYNTHESIS_TIMEOUT_MS = 60 * 1000;
+// A 3,200-character text took about 37 s to synthesize, so leave real headroom.
+const SYNTHESIS_TIMEOUT_MS = 150 * 1000;
 
 // Pictographs and other symbols the voice would skip or stumble on.
 const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu;
@@ -34,7 +35,8 @@ function prepareForSpeech(text) {
     .replace(/[*_`#>]+/g, "")
     .split(/\r?\n/)
     .map((line) => line.replace(BULLET_RE, "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+    // A line with no letters or digits ("---", stray symbols) has nothing to say.
+    .filter((line) => /[\p{L}\p{N}]/u.test(line));
 
   return lines.map((line) => (SENTENCE_END_RE.test(line) ? line : `${line}.`)).join("\n");
 }

@@ -123,6 +123,8 @@ globalThis.fetch = async (url, init = {}) => {
 // --- load the real bot ------------------------------------------------------
 require("../src/bot");
 const bot = FakeBot.instance;
+// This file makes more LLM calls per minute than the bot-wide politeness cap allows.
+require("../src/config").GLOBAL_LLM_PER_MINUTE = 1e9;
 
 const { MENU } = require("../src/handlers/menu");
 const { WELCOME_TEXT } = require("../src/messages");
@@ -166,13 +168,13 @@ test.before(async () => {
 });
 
 // --- /start, /help ----------------------------------------------------------
-test("/start sends the exact welcome text with the persistent six-button menu", async () => {
+test("/start sends the exact welcome text with the persistent seven-button menu", async () => {
   say(101, "/start");
   await waitFor(() => countTo(101) === 1, "welcome");
   const msg = lastTo(101);
   assert.equal(msg.text, WELCOME_TEXT);
   assert.equal(msg.opts.reply_markup.is_persistent, true);
-  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE]);
+  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE, MENU.TTS]);
 });
 
 test("/help repeats the menu keyboard", async () => {
@@ -194,7 +196,7 @@ test("a plain text message still becomes a Word file, with the two translate but
 test("menu labels are never converted to Word files", async () => {
   const before = bot.documents.length;
   for (const label of Object.values(MENU)) say(112, label);
-  await waitFor(() => countTo(112) === 6, "six menu replies");
+  await waitFor(() => countTo(112) === 7, "seven menu replies");
   assert.equal(bot.documents.length, before);
 });
 
@@ -333,7 +335,7 @@ test("admin approves: subscription saved for 30 days, user told, and now unlimit
 test("only the admin chat can approve: anyone else pressing the button changes nothing", async () => {
   for (let i = 0; i < 3; i++) await useOneFreeRequest(161);
   say(161, MENU.TRANSLATE);
-  await waitFor(() => lastTo(161).text === "متنی که می‌خوای ترجمه و ساده بشه رو بفرست 🌐\nهر زبانی باشه، به فارسی روان و ساده برات برمی‌گردونم.", "prompt");
+  await waitFor(() => /متنی که می‌خوای ترجمه بشه رو بفرست/.test(lastTo(161).text), "prompt");
   say(161, "one more");
   await waitFor(() => /سهمیه‌ی رایگان/.test(lastTo(161).text), "paywall");
 
@@ -470,4 +472,66 @@ test("a scanned PDF (no text layer) gets the friendly message and costs nothing"
   await waitFor(() => /اسکن‌شده/.test(lastTo(403).text), "no-text message");
   await waitFor(() => emulator.rows.get(403).weekly_request_count === 0, "refund");
   pdfTextValue = PDF_TEXT;
+});
+
+// --- translate: both directions through the menu button (regression) --------------
+// The menu button used to always translate "to Persian", so Persian text was never
+// translated to English. The direction is now detected from the text itself.
+const SIMPLIFY_PROMPT = /نسخه‌ی ساده/; // the English -> simplified Persian system prompt
+const TO_ENGLISH_PROMPT = /You are a translation assistant/; // the Persian -> English one
+
+async function menuTranslate(id, text) {
+  const groqBefore = groqCalls.length;
+  const before = countTo(id);
+  say(id, MENU.TRANSLATE);
+  await waitFor(() => countTo(id) === before + 1, "translate prompt");
+  say(id, text);
+  await waitFor(() => groqCalls.length === groqBefore + 1, "the model call");
+  await waitFor(() => lastTo(id).text === "نتیجه‌ی آزمایشی", "the result");
+  return { call: groqCalls.at(-1), processing: bot.messagesTo(id).at(-2).text };
+}
+
+test("REGRESSION: 🌐 with English text translates to simplified Persian", async () => {
+  const { call, processing } = await menuTranslate(1201, "Gradient descent minimizes a loss function by following its slope.");
+  assert.match(call.messages[0].content, SIMPLIFY_PROMPT);
+  assert.doesNotMatch(call.messages[0].content, TO_ENGLISH_PROMPT);
+  assert.equal(call.messages[1].content, "Gradient descent minimizes a loss function by following its slope.");
+  assert.match(processing, /ترجمه و ساده‌سازی/);
+});
+
+test("REGRESSION: 🌐 with Persian text translates to English", async () => {
+  const persian = "گرادیان کاهشی با دنبال کردن شیب تابع هزینه، مقدار خطا را کم می‌کند.";
+  const { call, processing } = await menuTranslate(1202, persian);
+  assert.match(call.messages[0].content, TO_ENGLISH_PROMPT);
+  assert.doesNotMatch(call.messages[0].content, SIMPLIFY_PROMPT);
+  assert.equal(call.messages[1].content, persian);
+  assert.match(processing, /ترجمه به انگلیسی/);
+});
+
+test("🌐 with Persian text that contains English terms is still treated as Persian", async () => {
+  const { call } = await menuTranslate(1203, "در این جلسه درباره‌ی gradient descent و learning rate صحبت کردیم و مثال‌های زیادی حل شد.");
+  assert.match(call.messages[0].content, TO_ENGLISH_PROMPT);
+});
+
+test("the inline buttons under a Word export keep forcing a direction, whatever the text", async () => {
+  say(1204, "این متن فارسیه ولی کاربر ترجمه و ساده‌سازی فارسی می‌خواد");
+  await waitFor(() => lastTo(1204) && lastTo(1204).opts && lastTo(1204).opts.reply_markup, "word export + buttons");
+  const [translateBtn] = lastTo(1204).opts.reply_markup.inline_keyboard[0];
+  const groqBefore = groqCalls.length;
+  press(1204, 1204, translateBtn.callback_data);
+  await waitFor(() => groqCalls.length === groqBefore + 1, "model call");
+  assert.match(groqCalls.at(-1).messages[0].content, SIMPLIFY_PROMPT, "explicit button: simplified Persian even for Persian text");
+});
+
+// --- "already used" referral link wording -------------------------------------------
+test("an existing user opening someone's invite link gets the exact requested wording", async () => {
+  say(1210, "/invite");
+  await waitFor(() => /start=ref_[A-Z0-9]{8}/.test((lastTo(1210) || {}).text || ""), "invite screen");
+  const code = /start=ref_([A-Z0-9]{8})/.exec(lastTo(1210).text)[1];
+
+  await useOneFreeRequest(1211); // 1211 already used the bot
+  say(1211, "/start ref_" + code);
+  await waitFor(() => bot.messagesTo(1211).some((m) => /لینک دعوت فقط/.test(m.text)), "refusal");
+  const refusal = bot.messagesTo(1211).find((m) => /لینک دعوت فقط/.test(m.text)).text;
+  assert.equal(refusal, "لینک دعوت فقط برای کاربرهای جدید هستش، ولی می‌تونی لینک خودت رو از «🎁 دعوت دوستان» بگیری.");
 });

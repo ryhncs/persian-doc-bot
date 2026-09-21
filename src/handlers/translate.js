@@ -5,6 +5,7 @@ const { GroqRateLimitError } = require("../services/groqClient");
 const { checkGlobalMinuteRate } = require("../services/rateLimiter");
 const { gatePremiumFeature, releasePremiumFeature } = require("./payment");
 const { afterDelivery } = require("./referral");
+const { detectTranslationAction } = require("../services/textDirection");
 
 const RATE_LIMIT_MESSAGE = "الان درخواست‌ها زیاده، چند لحظه دیگه دوباره امتحان کن 🙏";
 const NO_GROQ_KEY_MESSAGE = "قابلیت خلاصه‌سازی فعلاً روی این بات فعال نیست.";
@@ -18,10 +19,17 @@ const TRANSLATE_ERROR = "ترجمه/ساده‌سازی این متن با مش�
  * Word export (action "translate" = to simplified Persian, "toEnglish" = to
  * English) and by the "🌐 ترجمه و ساده‌سازی متن" menu button.
  *
+ * `action` is "translate" (to simplified Persian), "toEnglish", or "auto": the
+ * menu button uses "auto", which picks the direction from the text itself
+ * (mostly Persian -> English, anything else -> simplified Persian; see
+ * services/textDirection.js).
+ *
  * Counts against the weekly free quota and refunds it unless a result was
  * actually delivered.
  */
-async function runTranslation(bot, chatId, userId, text, action) {
+async function runTranslation(bot, chatId, userId, text, requestedAction) {
+  const action = requestedAction === "auto" ? detectTranslationAction(text) : requestedAction;
+
   if (!config.GROQ_API_KEY) {
     await bot.sendMessage(chatId, NO_GROQ_KEY_MESSAGE);
     return;

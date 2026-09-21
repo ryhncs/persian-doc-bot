@@ -14,6 +14,7 @@ const MENU = {
   COMPRESS: "🗜 فشرده‌سازی عکس و PDF",
   SUBSCRIBE: "💳 خرید اشتراک",
   INVITE: "🎁 دعوت دوستان",
+  TTS: "🔊 تبدیل متن به صدا",
 };
 
 const LABELS = new Set(Object.values(MENU));
@@ -24,6 +25,7 @@ function mainMenuKeyboard() {
       [MENU.VOICE, MENU.PDF],
       [MENU.TRANSLATE, MENU.COMPRESS],
       [MENU.SUBSCRIBE, MENU.INVITE],
+      [MENU.TTS],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -43,7 +45,11 @@ function voicePrompt() {
 const PDF_PROMPT =
   "فایل PDF جزوه‌ات رو بفرست تا خلاصه‌ش کنم 📄\nPDF باید متن‌دار باشه (نه اسکن) و حداکثر ۲۰ مگابایت.";
 const TRANSLATE_PROMPT =
-  "متنی که می‌خوای ترجمه و ساده بشه رو بفرست 🌐\nهر زبانی باشه، به فارسی روان و ساده برات برمی‌گردونم.";
+  "متنی که می‌خوای ترجمه بشه رو بفرست 🌐\nاگه فارسیه، به انگلیسی ترجمه‌ش می‌کنم و اگه انگلیسی (یا هر زبون دیگه‌ای) باشه، به فارسی روان و ساده برات برمی‌گردونم. زبان رو خودم تشخیص می‌دم.";
+function ttsPrompt() {
+  const max = formatNumber(config.TTS_TEXT_MAX_CHARS);
+  return `متنی که می‌خوای به صدا تبدیل بشه رو بفرست 🔊\nحداکثر حدود ${max} کاراکتر (نزدیک ۶ دقیقه صدا) و همه‌ی متن رو توی یه پیام بفرست. این کار یه درخواست از سهمیه‌ات حساب می‌شه.`;
+}
 const COMPRESS_PROMPT = "عکس یا فایل PDF رو بفرست تا حجمش رو کم کنم 🗜";
 
 /**
@@ -80,6 +86,15 @@ async function handleMenuButton(bot, msg) {
     case MENU.INVITE:
       modes.clear(userId);
       await sendInviteInfo(bot, chatId, userId);
+      return;
+    case MENU.TTS:
+      if (!config.TTS_ENABLED) {
+        modes.clear(userId);
+        await bot.sendMessage(chatId, "تبدیل متن به صدا فعلاً روی این بات فعال نیست.");
+        return;
+      }
+      modes.set(userId, MODES.TTS_TEXT);
+      await bot.sendMessage(chatId, ttsPrompt());
       return;
     default:
       return;

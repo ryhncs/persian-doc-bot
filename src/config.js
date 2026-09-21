@@ -121,6 +121,13 @@ const BOT_USERNAME = (process.env.BOT_USERNAME || "koolehbot").replace(/^@/, "")
 const TTS_ENABLED = !/^(false|0|no|off)$/i.test((process.env.TTS_ENABLED || "").trim());
 const TTS_VOICE = process.env.TTS_VOICE || "fa-IR-DilaraNeural";
 const SUBSCRIBER_AUDIO_PER_DAY = intEnv("SUBSCRIBER_AUDIO_PER_DAY", 15, 1);
+// "🔊 تبدیل متن به صدا": longest text accepted, in characters. Measured with the
+// Edge fa-IR voice: about 12 characters per second for casual Persian with
+// digits (13.6 for plain prose), so 6 minutes (360 s) is roughly 4,300 to 4,900
+// characters. 4,000 keeps the audio under 6 minutes even at the slow rate
+// (about 5.5 minutes) and is just under Telegram's own 4,096-character limit
+// for a single message.
+const TTS_TEXT_MAX_CHARS = intEnv("TTS_TEXT_MAX_CHARS", 4000, 100);
 
 const MISSING_MONETIZATION_VARS = Object.entries({
   SUPABASE_URL,
@@ -167,6 +174,7 @@ module.exports = {
   TTS_ENABLED,
   TTS_VOICE,
   SUBSCRIBER_AUDIO_PER_DAY,
+  TTS_TEXT_MAX_CHARS,
   MISSING_MONETIZATION_VARS,
   MONETIZATION_ENABLED,
 };
