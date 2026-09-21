@@ -22,7 +22,6 @@ function createFakeStore({ failWith, pingWarnings = [] } = {}) {
     referral_qualified_at: null,
     bonus_requests: 0,
     successful_referrals: 0,
-    referral_progress: 0,
     coupons_available: 0,
     coupons_redeemed: 0,
   });

@@ -137,7 +137,7 @@ test("the bonus is paid when the invitee's first request is delivered: +2 to bot
   assert.equal(ctx.store.rows.get(2).bonus_requests, 2);
   assert.equal(ctx.store.rows.get(1).bonus_requests, 2);
   assert.equal(ctx.store.rows.get(1).successful_referrals, 1);
-  assert.equal(ctx.store.rows.get(1).referral_progress, 1);
+  assert.equal((await ctx.referrals.getInfo(1)).untilNextCoupon, 2);
   assert.ok(ctx.store.rows.get(2).referral_qualified_at);
   assert.ok(ctx.store.rows.get(2).first_action_at);
 });
@@ -192,7 +192,7 @@ test("referral counting survives many invitees confirming at the same time", asy
   assert.equal(row.successful_referrals, 5);
   assert.equal(row.bonus_requests, 10);
   assert.equal(row.coupons_available, 1);
-  assert.equal(row.referral_progress, 5);
+  assert.equal((await ctx.referrals.getInfo(1)).untilNextCoupon, 1, "5 total: 2 of 3 toward the next");
 });
 
 // --- the cap ---------------------------------------------------------------------
@@ -227,30 +227,63 @@ test("every 3 successful referrals earn a coupon, and coupons bank up", async ()
   assert.equal(info.untilNextCoupon, 2, "1 of 3 toward the next");
 });
 
-test("redeeming uses exactly one coupon and resets the referral count to 0", async () => {
+test("redeeming only lowers the coupon balance: the referral total and progress toward the next coupon are untouched", async () => {
   const ctx = setup();
   const code = await codeFor(ctx, 1);
-  for (let id = 300; id < 307; id++) await invitedUserCompletesARequest(ctx, code, id); // 2 coupons, 1 toward next
+  for (let id = 300; id < 307; id++) await invitedUserCompletesARequest(ctx, code, id); // 7 referrals: 2 coupons, 1 toward the third
+
+  const before = await ctx.referrals.getInfo(1);
+  assert.equal(before.coupons, 2);
+  assert.equal(before.successful, 7);
+  assert.equal(before.progressToNext, 1);
 
   assert.equal(await ctx.referrals.redeemCoupon(1), true);
-  let row = ctx.store.rows.get(1);
+  const row = ctx.store.rows.get(1);
   assert.equal(row.coupons_available, 1);
   assert.equal(row.coupons_redeemed, 1);
-  assert.equal(row.referral_progress, 0, "count reset");
-  assert.equal((await ctx.referrals.getInfo(1)).untilNextCoupon, 3, "needs 3 more referrals");
+  assert.equal(row.successful_referrals, 7, "the running total is not reset");
+  const after = await ctx.referrals.getInfo(1);
+  assert.equal(after.progressToNext, 1, "still 1 of 3: partial progress kept");
+  assert.equal(after.untilNextCoupon, 2);
 
+  // 2 more referrals reach 9, a new multiple of 3: one more coupon, however many were redeemed.
   await invitedUserCompletesARequest(ctx, code, 310);
+  assert.equal(ctx.store.rows.get(1).coupons_available, 1, "8 referrals: no new coupon yet");
   await invitedUserCompletesARequest(ctx, code, 311);
-  assert.equal(ctx.store.rows.get(1).coupons_available, 1, "2 more referrals: no new coupon yet");
-  await invitedUserCompletesARequest(ctx, code, 312);
-  assert.equal(ctx.store.rows.get(1).coupons_available, 2, "the 3rd earns the next one");
+  assert.equal(ctx.store.rows.get(1).coupons_available, 2, "the 9th referral earns the next coupon");
 
+  // Redeem everything; the total keeps counting from 9, so the 12th is the next coupon.
   assert.equal(await ctx.referrals.redeemCoupon(1), true);
   assert.equal(await ctx.referrals.redeemCoupon(1), true);
   assert.equal(await ctx.referrals.redeemCoupon(1), false, "none left");
-  row = ctx.store.rows.get(1);
-  assert.equal(row.coupons_available, 0);
-  assert.equal(row.coupons_redeemed, 3);
+  assert.equal(ctx.store.rows.get(1).coupons_redeemed, 3);
+  assert.equal(ctx.store.rows.get(1).successful_referrals, 9);
+  await invitedUserCompletesARequest(ctx, code, 312);
+  await invitedUserCompletesARequest(ctx, code, 313);
+  assert.equal(ctx.store.rows.get(1).coupons_available, 0);
+  await invitedUserCompletesARequest(ctx, code, 314);
+  assert.equal(ctx.store.rows.get(1).coupons_available, 1, "12th referral");
+});
+
+test("coupons are awarded by the running total no matter when they are redeemed (redeem early, redeem late: same result)", async () => {
+  const earlyCtx = setup();
+  const lateCtx = setup();
+  const earlyCode = await codeFor(earlyCtx, 1);
+  const lateCode = await codeFor(lateCtx, 1);
+  for (let i = 0; i < 9; i++) {
+    await invitedUserCompletesARequest(earlyCtx, earlyCode, 600 + i);
+    await invitedUserCompletesARequest(lateCtx, lateCode, 600 + i);
+    if ((i + 1) % 3 === 0) await earlyCtx.referrals.redeemCoupon(1); // redeem as soon as each is earned
+  }
+  await lateCtx.referrals.redeemCoupon(1);
+  await lateCtx.referrals.redeemCoupon(1);
+  await lateCtx.referrals.redeemCoupon(1);
+  for (const ctx of [earlyCtx, lateCtx]) {
+    const row = ctx.store.rows.get(1);
+    assert.equal(row.successful_referrals, 9);
+    assert.equal(row.coupons_available, 0);
+    assert.equal(row.coupons_redeemed, 3);
+  }
 });
 
 test("two concurrent redemptions of a single coupon succeed only once", async () => {

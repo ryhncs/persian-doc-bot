@@ -9,9 +9,12 @@
 //     `bonusRequests` extra requests. Clicking the link or pressing Start pays
 //     nothing, and a request that fails (and is refunded) doesn't count.
 //   - The referrer's first `bonusCap` successful referrals earn the bonus;
-//     coupons keep counting after that. Every `perCoupon` successful referrals
-//     earns one discount coupon; coupons bank up and never expire. Redeeming
-//     one (redeemCoupon) resets the progress counter to 0.
+//     coupons keep counting after that. Whenever a user's running total of
+//     successful referrals reaches a new multiple of `perCoupon` they earn one
+//     discount coupon; coupons bank up and never expire. Progress toward the
+//     next coupon is always that total modulo `perCoupon`: redeeming a coupon
+//     (redeemCoupon) only lowers the coupon balance and never touches the
+//     total, so it is independent of how many coupons were already redeemed.
 //
 // Fails OPEN like the rest of monetization: nothing here throws. If the
 // database is unreachable the bot keeps working and referrals just aren't
@@ -95,18 +98,17 @@ function createReferralService({
       const r = await store.getUser(referrerId);
       if (!r) return null;
       const successful = num(r.successful_referrals);
-      const progress = num(r.referral_progress);
       const coupons = num(r.coupons_available);
       const bonus = num(r.bonus_requests);
 
       const bonusGranted = successful < bonusCap;
-      const couponEarned = (progress + 1) % perCoupon === 0;
+      // The running total just crossed a new multiple of perCoupon.
+      const couponEarned = (successful + 1) % perCoupon === 0;
       const row = await store.tryUpdate(
         referrerId,
-        { successful_referrals: successful, referral_progress: progress, coupons_available: coupons, bonus_requests: bonus },
+        { successful_referrals: successful, coupons_available: coupons, bonus_requests: bonus },
         {
           successful_referrals: successful + 1,
-          referral_progress: progress + 1,
           coupons_available: coupons + (couponEarned ? 1 : 0),
           bonus_requests: bonus + (bonusGranted ? bonusRequests : 0),
         }
@@ -117,7 +119,7 @@ function createReferralService({
           bonusGranted,
           bonus: bonusRequests,
           successful: successful + 1,
-          progress: (progress + 1) % perCoupon,
+          progress: (successful + 1) % perCoupon,
           couponEarned,
           coupons: coupons + (couponEarned ? 1 : 0),
         };
@@ -174,12 +176,11 @@ function createReferralService({
 
   function summarize(user) {
     const successful = num(user.successful_referrals);
-    const progress = num(user.referral_progress);
     return {
       code: user.referral_code,
       successful,
-      progressToNext: progress % perCoupon,
-      untilNextCoupon: perCoupon - (progress % perCoupon),
+      progressToNext: successful % perCoupon,
+      untilNextCoupon: perCoupon - (successful % perCoupon),
       coupons: num(user.coupons_available),
       couponsRedeemed: num(user.coupons_redeemed),
       bonusRequests: num(user.bonus_requests),
@@ -214,7 +215,7 @@ function createReferralService({
     }
   }
 
-  /** Uses up one coupon (and resets the progress counter). True if one was redeemed. */
+  /** Uses up one coupon; only the coupon balance changes (not the referral total). True if one was redeemed. */
   async function redeemCoupon(userId) {
     if (!enabled) return false;
     try {
@@ -223,11 +224,10 @@ function createReferralService({
         if (!user || num(user.coupons_available) <= 0) return false;
         const coupons = num(user.coupons_available);
         const redeemed = num(user.coupons_redeemed);
-        const progress = num(user.referral_progress);
         const row = await store.tryUpdate(
           userId,
-          { coupons_available: coupons, coupons_redeemed: redeemed, referral_progress: progress },
-          { coupons_available: coupons - 1, coupons_redeemed: redeemed + 1, referral_progress: 0 }
+          { coupons_available: coupons, coupons_redeemed: redeemed },
+          { coupons_available: coupons - 1, coupons_redeemed: redeemed + 1 }
         );
         if (row) return true;
       }

@@ -31,11 +31,14 @@ alter table public.users enable row level security;
 --                          before
 --   referral_qualified_at  when the invitee's bonus was paid
 --   bonus_requests         extra free requests (spent after the weekly ones)
---   successful_referrals   invitees who completed a real request (lifetime)
---   referral_progress      successful referrals since the last coupon redemption;
---                          every 3rd one earns a coupon, redeeming resets it to 0
---   coupons_available      unused 20% discount coupons (they never expire)
+--   successful_referrals   invitees who completed a real request (running total,
+--                          never reset); a coupon is earned each time it reaches
+--                          a new multiple of 3
+--   coupons_available      unused 20% discount coupons (they never expire);
+--                          redeeming one only lowers this, never the total above
 --   coupons_redeemed       coupons already used on a purchase
+-- (An older version of this file also added referral_progress; it is no longer
+-- used and can be dropped: alter table public.users drop column referral_progress;)
 
 -- Existing users count as "already active" (they can't be referred): this
 -- backfill runs only the first time, when the column doesn't exist yet.
@@ -55,7 +58,6 @@ alter table public.users add column if not exists referred_by           bigint;
 alter table public.users add column if not exists referral_qualified_at timestamptz;
 alter table public.users add column if not exists bonus_requests        integer not null default 0;
 alter table public.users add column if not exists successful_referrals  integer not null default 0;
-alter table public.users add column if not exists referral_progress     integer not null default 0;
 alter table public.users add column if not exists coupons_available     integer not null default 0;
 alter table public.users add column if not exists coupons_redeemed      integer not null default 0;
 

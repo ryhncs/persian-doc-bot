@@ -297,9 +297,11 @@ to re-run).
   A user holding one sees the discounted price on the paywall and the 💳 screen
   (120,000 becomes 96,000 toman), and the receipt sent to the admin shows the
   expected amount; the admin's ✅ button then carries a coupon flag
-  (`pay:approve:<id>:d`). Approving redeems exactly one coupon and resets the
-  referral count (`referral_progress`) to 0, so 3 more referrals are needed for
-  the next one; coupons that were already banked are kept.
+  (`pay:approve:<id>:d`). Approving redeems exactly one coupon. The referral
+  total (`successful_referrals`) is never reset: a coupon is earned each time it
+  reaches a new multiple of 3, so progress toward the next coupon is always
+  `total mod 3`, independent of how many coupons were already redeemed. Redeeming
+  only lowers the coupon balance.
 - **If the database is down** the bot keeps working; referral bonuses and coupons
   simply aren't tracked or applied during the outage, and `/invite` says it
   can't build the link right now.

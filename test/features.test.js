@@ -527,7 +527,7 @@ test("3 successful referrals earn a coupon; the payment screen shows the 20% pri
   tap(999, 999, "pay:approve:800:d");
   await waitFor(() => row(800).coupons_redeemed === 1, "coupon redeemed");
   assert.equal(row(800).coupons_available, 0);
-  assert.equal(row(800).referral_progress, 0, "referral count reset to 0");
+  assert.equal(row(800).successful_referrals, 3, "redeeming leaves the referral total untouched");
   assert.ok(Date.parse(row(800).subscription_expires_at) > Date.now());
   await waitFor(() => bot.messagesTo(800).some((m) => /کوپن تخفیفت روی این خرید استفاده شد/.test(m.text)), "user told");
   assert.ok(bot.edits.some((e) => e.caption && /یک کوپن تخفیف استفاده شد/.test(e.text)), "admin message notes the coupon");
