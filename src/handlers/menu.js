@@ -9,12 +9,15 @@ const { sendInviteInfo } = require("./referral");
 // text as "convert this to Word".
 const MENU = {
   VOICE: "🎙 خلاصه پیام صوتی",
+  VOICE_TO_TEXT: "🎙 تبدیل صدا به متن",
   PDF: "📄 خلاصه جزوه PDF",
+  PDF_TO_TEXT: "📄 تبدیل متن PDF به متن",
   TRANSLATE: "🌐 ترجمه و ساده‌سازی متن",
   COMPRESS: "🗜 فشرده‌سازی عکس و PDF",
   SUBSCRIBE: "💳 خرید اشتراک",
   INVITE: "🎁 دعوت دوستان",
   TTS: "🔊 تبدیل متن به صدا",
+  TEXT_TO_FILE: "📝 تبدیل متن به فایل",
 };
 
 const LABELS = new Set(Object.values(MENU));
@@ -22,10 +25,11 @@ const LABELS = new Set(Object.values(MENU));
 function mainMenuKeyboard() {
   return {
     keyboard: [
-      [MENU.VOICE, MENU.PDF],
+      [MENU.VOICE, MENU.VOICE_TO_TEXT],
+      [MENU.PDF, MENU.PDF_TO_TEXT],
       [MENU.TRANSLATE, MENU.COMPRESS],
       [MENU.SUBSCRIBE, MENU.INVITE],
-      [MENU.TTS],
+      [MENU.TTS, MENU.TEXT_TO_FILE],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -42,8 +46,16 @@ function voicePrompt() {
   return `پیام صوتیت رو بفرست (یا از یه چت دیگه فوروارد کن) تا خلاصه‌ش کنم 🎙\nمدتش باید بین ${min} ثانیه تا ${max} دقیقه باشه.`;
 }
 
+function voiceToTextPrompt() {
+  const min = formatNumber(config.MIN_VOICE_DURATION_SECONDS);
+  const max = formatNumber(Math.round(config.MAX_VOICE_DURATION_SECONDS / 60));
+  return `پیام صوتیت رو بفرست تا کامل و بدون خلاصه‌سازی برات پیاده کنم 🎙\nمدتش باید بین ${min} ثانیه تا ${max} دقیقه باشه.`;
+}
+
 const PDF_PROMPT =
   "فایل PDF جزوه‌ات رو بفرست تا خلاصه‌ش کنم 📄\nPDF باید متن‌دار باشه (نه اسکن) و حداکثر ۲۰ مگابایت.";
+const PDF_TO_TEXT_PROMPT =
+  "فایل PDF رو بفرست تا متنش رو کامل و بدون خلاصه‌سازی به فایل Word تبدیل کنم 📄\nPDF باید متن‌دار باشه (نه اسکن) و حداکثر ۲۰ مگابایت.";
 const TRANSLATE_PROMPT =
   "متنی که می‌خوای ترجمه بشه رو بفرست 🌐\nاگه فارسیه، به انگلیسی ترجمه‌ش می‌کنم و اگه انگلیسی (یا هر زبون دیگه‌ای) باشه، به فارسی روان و ساده برات برمی‌گردونم. زبان رو خودم تشخیص می‌دم.";
 function ttsPrompt() {
@@ -51,6 +63,8 @@ function ttsPrompt() {
   return `متنی که می‌خوای به صدا تبدیل بشه رو بفرست 🔊\nحداکثر حدود ${max} کاراکتر (نزدیک ۶ دقیقه صدا) و همه‌ی متن رو توی یه پیام بفرست. این کار یه درخواست از سهمیه‌ات حساب می‌شه.`;
 }
 const COMPRESS_PROMPT = "عکس یا فایل PDF رو بفرست تا حجمش رو کم کنم 🗜";
+const TEXT_TO_FILE_PROMPT =
+  "متنی که می‌خوای به فایل Word تبدیل بشه رو بفرست 📝\nهمه‌ی متن رو توی یه پیام بفرست. این کار یه درخواست از سهمیه‌ات حساب می‌شه.";
 
 /**
  * Handles a tap on a menu button. Buttons that need input (a text, a PDF, a
@@ -67,9 +81,17 @@ async function handleMenuButton(bot, msg) {
       modes.clear(userId);
       await bot.sendMessage(chatId, voicePrompt());
       return;
+    case MENU.VOICE_TO_TEXT:
+      modes.set(userId, MODES.VOICE_TO_TEXT);
+      await bot.sendMessage(chatId, voiceToTextPrompt());
+      return;
     case MENU.PDF:
       modes.set(userId, MODES.SUMMARIZE_PDF);
       await bot.sendMessage(chatId, PDF_PROMPT);
+      return;
+    case MENU.PDF_TO_TEXT:
+      modes.set(userId, MODES.PDF_TO_TEXT);
+      await bot.sendMessage(chatId, PDF_TO_TEXT_PROMPT);
       return;
     case MENU.TRANSLATE:
       modes.set(userId, MODES.TRANSLATE);
@@ -95,6 +117,10 @@ async function handleMenuButton(bot, msg) {
       }
       modes.set(userId, MODES.TTS_TEXT);
       await bot.sendMessage(chatId, ttsPrompt());
+      return;
+    case MENU.TEXT_TO_FILE:
+      modes.set(userId, MODES.TEXT_TO_FILE);
+      await bot.sendMessage(chatId, TEXT_TO_FILE_PROMPT);
       return;
     default:
       return;
