@@ -42,10 +42,10 @@ test("the keyboard is a persistent reply keyboard with the ten buttons, not inli
     MENU.PDF_TO_TEXT,
     MENU.TRANSLATE,
     MENU.COMPRESS,
-    MENU.SUBSCRIBE,
-    MENU.INVITE,
     MENU.TTS,
     MENU.TEXT_TO_FILE,
+    MENU.SUBSCRIBE,
+    MENU.INVITE,
   ]);
   assert.equal(MENU.TTS, "🔊 تبدیل متن به صدا");
   assert.equal(MENU.INVITE, "🎁 دعوت دوستان");

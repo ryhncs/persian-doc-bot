@@ -181,10 +181,10 @@ test("/start sends the exact welcome text with the persistent ten-button menu", 
     MENU.PDF_TO_TEXT,
     MENU.TRANSLATE,
     MENU.COMPRESS,
-    MENU.SUBSCRIBE,
-    MENU.INVITE,
     MENU.TTS,
     MENU.TEXT_TO_FILE,
+    MENU.SUBSCRIBE,
+    MENU.INVITE,
   ]);
 });
 
