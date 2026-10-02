@@ -54,7 +54,7 @@ function createSupabaseStore({
 }) {
   const base = `${normalizeSupabaseUrl(url)}/rest/v1/users`;
 
-  async function request(method, query, { body, prefer } = {}) {
+  async function request(method, query, { body, prefer, onResponse } = {}) {
     const res = await fetchImpl(`${base}${query}`, {
       method,
       signal: AbortSignal.timeout(timeoutMs),
@@ -73,6 +73,7 @@ function createSupabaseStore({
       throw new Error(`Supabase ${method} ${base} failed (${res.status}): ${detail.slice(0, 300)}`);
     }
 
+    if (onResponse) onResponse(res);
     const text = await res.text();
     return text ? JSON.parse(text) : [];
   }
@@ -84,6 +85,23 @@ function createSupabaseStore({
     async ping() {
       await request("GET", "?select=telegram_user_id&limit=1");
       return { warnings: keyWarnings(key) };
+    },
+
+    // Total rows in the users table (everyone who ever started the bot). Reads
+    // the exact count from the Content-Range header ("0-0/123" or "*/0").
+    async countUsers() {
+      let range = "";
+      await request("GET", "?select=telegram_user_id&limit=1", {
+        prefer: "count=exact",
+        onResponse: (res) => {
+          range = (res.headers && res.headers.get("content-range")) || "";
+        },
+      });
+      const total = Number(range.split("/")[1]);
+      if (!Number.isSafeInteger(total) || total < 0) {
+        throw new Error(`Supabase count unavailable (Content-Range: ${range || "missing"})`);
+      }
+      return total;
     },
 
     async getUser(id) {

@@ -50,6 +50,13 @@ test("status for a healthy setup shows the caller's usage and reset date", () =>
   assert.ok(text.includes(formatPersianDate(now + 3 * DAY)));
 });
 
+test("status shows the total user count when known and omits the line when not", () => {
+  const base = { enabled: true, limit: 3, db: { ok: true }, user: null };
+  assert.match(buildStatusText({ ...base, totalUsers: 1234 }, cfg), /تعداد کل کاربران: ۱٬?۲۳۴/);
+  assert.doesNotMatch(buildStatusText({ ...base, totalUsers: null }, cfg), /تعداد کل کاربران/);
+  assert.doesNotMatch(buildStatusText(base, cfg), /تعداد کل کاربران/);
+});
+
 test("status shows an active subscription (which is exactly why an account looks unlimited)", () => {
   const until = Date.UTC(2026, 9, 20);
   const text = buildStatusText(

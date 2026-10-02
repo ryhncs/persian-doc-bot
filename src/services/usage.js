@@ -209,8 +209,14 @@ function createUsageService({
 
   /** Everything /status shows: is enforcement on, does the DB answer, and this user's record. */
   async function diagnose(userId) {
-    const report = { enabled, limit, db: await probe(), user: null };
+    const report = { enabled, limit, db: await probe(), user: null, totalUsers: null };
     if (enabled && report.db.ok) {
+      // Best effort: a failed count just leaves the line out of /status.
+      try {
+        if (typeof store.countUsers === "function") report.totalUsers = await store.countUsers();
+      } catch (err) {
+        log.error("[usage] could not count users for /status:", err && err.message);
+      }
       try {
         const row = await store.getUser(userId);
         if (row) {

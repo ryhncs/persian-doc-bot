@@ -12,6 +12,7 @@ function mockFetch(responses) {
     return {
       ok: next.status >= 200 && next.status < 300,
       status: next.status,
+      headers: { get: (name) => (next.headers || {})[name.toLowerCase()] ?? null },
       text: async () => (next.body === undefined ? "" : JSON.stringify(next.body)),
     };
   };
@@ -37,6 +38,24 @@ test("getUser: GET with the id filter, service-key auth headers, returns the fir
   );
   assert.equal(calls[0].init.headers.apikey, "service-key");
   assert.equal(calls[0].init.headers.Authorization, "Bearer service-key");
+});
+
+test("countUsers: asks for an exact count and reads the total from Content-Range", async () => {
+  const { store, calls } = storeWith([
+    { status: 200, body: [{ telegram_user_id: 1 }], headers: { "content-range": "0-0/1234" } },
+    { status: 200, body: [], headers: { "content-range": "*/0" } },
+  ]);
+
+  assert.equal(await store.countUsers(), 1234);
+  assert.equal(calls[0].init.method, "GET");
+  assert.equal(calls[0].init.headers.Prefer, "count=exact");
+  assert.equal(await store.countUsers(), 0);
+});
+
+test("countUsers: throws when the count header is missing or the request fails", async () => {
+  const { store } = storeWith([{ status: 200, body: [] }, { status: 500, body: { message: "boom" } }]);
+  await assert.rejects(() => store.countUsers(), /count unavailable/);
+  await assert.rejects(() => store.countUsers(), /failed \(500\)/);
 });
 
 test("getUser: returns null when there is no row", async () => {
