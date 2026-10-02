@@ -9,6 +9,9 @@ const MODES = {
   SUMMARIZE_PDF: "summarizePdf", // next PDF -> summarize
   COMPRESS: "compress", // next photo or PDF -> compress
   TTS_TEXT: "ttsText", // next text message -> read it aloud as a voice message
+  VOICE_TO_TEXT: "voiceToText", // next voice/audio message -> raw transcript, no summary
+  PDF_TO_TEXT: "pdfToText", // next PDF -> full extracted text as a Word file, no summary
+  TEXT_TO_FILE: "textToFile", // next text message -> export as a file (Word for now)
 };
 
 const MODE_TTL_MS = 10 * 60 * 1000;

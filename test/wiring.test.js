@@ -168,13 +168,24 @@ test.before(async () => {
 });
 
 // --- /start, /help ----------------------------------------------------------
-test("/start sends the exact welcome text with the persistent seven-button menu", async () => {
+test("/start sends the exact welcome text with the persistent ten-button menu", async () => {
   say(101, "/start");
   await waitFor(() => countTo(101) === 1, "welcome");
   const msg = lastTo(101);
   assert.equal(msg.text, WELCOME_TEXT);
   assert.equal(msg.opts.reply_markup.is_persistent, true);
-  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE, MENU.TTS]);
+  assert.deepEqual(msg.opts.reply_markup.keyboard.flat(), [
+    MENU.VOICE,
+    MENU.VOICE_TO_TEXT,
+    MENU.PDF,
+    MENU.PDF_TO_TEXT,
+    MENU.TRANSLATE,
+    MENU.COMPRESS,
+    MENU.TTS,
+    MENU.TEXT_TO_FILE,
+    MENU.SUBSCRIBE,
+    MENU.INVITE,
+  ]);
 });
 
 test("/help repeats the menu keyboard", async () => {
@@ -196,7 +207,7 @@ test("a plain text message still becomes a Word file, with the two translate but
 test("menu labels are never converted to Word files", async () => {
   const before = bot.documents.length;
   for (const label of Object.values(MENU)) say(112, label);
-  await waitFor(() => countTo(112) === 7, "seven menu replies");
+  await waitFor(() => countTo(112) === Object.keys(MENU).length, "one reply per menu label");
   assert.equal(bot.documents.length, before);
 });
 

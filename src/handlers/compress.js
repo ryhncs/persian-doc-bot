@@ -4,6 +4,7 @@ const { compressPdf } = require("../services/pdfCompress");
 const { createSession } = require("../services/sessionStore");
 const { modes, MODES } = require("../services/userMode");
 const { runPdfSummary } = require("./pdfSummary");
+const { runPdfToText } = require("./pdfToText");
 
 const PROCESSING = "⏳ در حال فشرده‌سازی فایل...";
 const GENERIC_ERROR = "فشرده‌سازی فایل با مشکل مواجه شد. دوباره امتحان کن.";
@@ -100,9 +101,10 @@ async function handleDocumentMessage(bot, msg) {
   const userId = msg.from.id;
   const doc = msg.document;
 
-  // If the user just tapped "📄 خلاصه جزوه PDF" or "🗜 فشرده‌سازی عکس و PDF"
-  // in the menu, this PDF already has a purpose: skip the "which one?" question.
-  const chosen = modes.take(userId, MODES.SUMMARIZE_PDF, MODES.COMPRESS);
+  // If the user just tapped "📄 خلاصه جزوه PDF", "📄 تبدیل متن PDF به متن" or
+  // "🗜 فشرده‌سازی عکس و PDF" in the menu, this PDF already has a purpose:
+  // skip the "which one?" question.
+  const chosen = modes.take(userId, MODES.SUMMARIZE_PDF, MODES.PDF_TO_TEXT, MODES.COMPRESS);
   modes.clear(userId);
 
   if (doc.mime_type !== "application/pdf") {
@@ -117,6 +119,11 @@ async function handleDocumentMessage(bot, msg) {
 
   if (chosen === MODES.SUMMARIZE_PDF) {
     await runPdfSummary(bot, chatId, userId, doc.file_id);
+    return;
+  }
+
+  if (chosen === MODES.PDF_TO_TEXT) {
+    await runPdfToText(bot, chatId, userId, doc.file_id, doc.file_name);
     return;
   }
 

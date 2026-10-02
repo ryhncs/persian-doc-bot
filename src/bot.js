@@ -1,6 +1,7 @@
 const TelegramBot = require("node-telegram-bot-api");
 const { textToDocxBuffer } = require("./docGenerator");
 const { handleVoiceMessage } = require("./handlers/voice");
+const { runVoiceToText } = require("./handlers/voiceToText");
 const { handleCallbackQuery } = require("./handlers/callbacks");
 const { handlePhotoMessage, handleDocumentMessage } = require("./handlers/compress");
 const { createSession } = require("./services/sessionStore");
@@ -8,6 +9,7 @@ const { handlePaymentPhoto } = require("./handlers/payment");
 const { mainMenuKeyboard, isMenuLabel, handleMenuButton } = require("./handlers/menu");
 const { runTranslation } = require("./handlers/translate");
 const { runTextToSpeech } = require("./handlers/audioVersion");
+const { runTextToFile } = require("./handlers/textToFile");
 const referral = require("./handlers/referral");
 const { handleStatusCommand, installDegradedAlert } = require("./handlers/admin");
 const { modes, MODES } = require("./services/userMode");
@@ -152,6 +154,13 @@ bot.on("message", async (msg) => {
     });
     return;
   }
+  // "📝 تبدیل متن به فایل" was tapped: export this text as a file.
+  if (modes.take(userId, MODES.TEXT_TO_FILE)) {
+    runTextToFile(bot, chatId, userId, rawText).catch((err) => {
+      console.error("Unhandled error in text-to-file handler:", err);
+    });
+    return;
+  }
   modes.clear(userId); // any other text means the user moved on
 
   try {
@@ -191,20 +200,19 @@ bot.on("message", async (msg) => {
   }
 });
 
-// New: voice-message transcription + summarization flow.
-bot.on("voice", (msg) => {
+// New: voice-message transcription + summarization flow. "🎙 تبدیل صدا به متن"
+// was tapped -> the raw, unsummarized transcript instead (handlers/voiceToText.js).
+function handleVoiceOrAudio(msg) {
+  const wantsRawTranscript = modes.take(msg.from.id, MODES.VOICE_TO_TEXT);
   modes.clear(msg.from.id);
-  handleVoiceMessage(bot, msg).catch((err) => {
+  const run = wantsRawTranscript ? runVoiceToText(bot, msg) : handleVoiceMessage(bot, msg);
+  run.catch((err) => {
     console.error("Unhandled error in voice handler:", err);
   });
-});
+}
 
-bot.on("audio", (msg) => {
-  modes.clear(msg.from.id);
-  handleVoiceMessage(bot, msg).catch((err) => {
-    console.error("Unhandled error in voice handler:", err);
-  });
-});
+bot.on("voice", handleVoiceOrAudio);
+bot.on("audio", handleVoiceOrAudio);
 
 // New: image/PDF compression flow.
 // A photo is an image to compress, unless it comes from a user who was just

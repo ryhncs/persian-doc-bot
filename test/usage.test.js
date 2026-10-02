@@ -221,6 +221,21 @@ test("diagnose: reports enforcement, database health and the caller's own record
   assert.equal((await usage.diagnose(42)).user.subscribedUntil, clock() + 30 * DAY);
 });
 
+test("diagnose: includes the total user count, and skips it (fail open) if counting fails", async () => {
+  const { usage, store } = setup();
+  await usage.checkAndConsume(1);
+  await usage.checkAndConsume(2);
+  assert.equal((await usage.diagnose(1)).totalUsers, 2);
+
+  store.countUsers = async () => {
+    throw new Error("count failed");
+  };
+  const report = await usage.diagnose(1);
+  assert.equal(report.totalUsers, null);
+  assert.equal(report.db.ok, true);
+  assert.equal(report.user.used, 1);
+});
+
 test("diagnose: with monetization disabled it says so instead of throwing", async () => {
   const { usage } = setup({ noStore: true });
   const report = await usage.diagnose(42);

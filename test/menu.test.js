@@ -30,12 +30,23 @@ test("menu labels are exactly the requested wording (ZWNJ included)", () => {
   assert.equal(MENU.SUBSCRIBE, "💳 خرید اشتراک");
 });
 
-test("the keyboard is a persistent reply keyboard with the seven buttons, not inline buttons", () => {
+test("the keyboard is a persistent reply keyboard with the ten buttons, not inline buttons", () => {
   const kb = mainMenuKeyboard();
   assert.equal(kb.is_persistent, true);
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.inline_keyboard, undefined);
-  assert.deepEqual(kb.keyboard.flat(), [MENU.VOICE, MENU.PDF, MENU.TRANSLATE, MENU.COMPRESS, MENU.SUBSCRIBE, MENU.INVITE, MENU.TTS]);
+  assert.deepEqual(kb.keyboard.flat(), [
+    MENU.VOICE,
+    MENU.VOICE_TO_TEXT,
+    MENU.PDF,
+    MENU.PDF_TO_TEXT,
+    MENU.TRANSLATE,
+    MENU.COMPRESS,
+    MENU.TTS,
+    MENU.TEXT_TO_FILE,
+    MENU.SUBSCRIBE,
+    MENU.INVITE,
+  ]);
   assert.equal(MENU.TTS, "🔊 تبدیل متن به صدا");
   assert.equal(MENU.INVITE, "🎁 دعوت دوستان");
 });

@@ -5,9 +5,10 @@ bot. All user-facing text is Persian, and it copes with mixed Persian/English
 input.
 
 Everything starts from a persistent menu under the message box (shown after
-`/start`): **🎙 خلاصه پیام صوتی**, **📄 خلاصه جزوه PDF**, **🌐 ترجمه و
-ساده‌سازی متن**, **🗜 فشرده‌سازی عکس و PDF**, **💳 خرید اشتراک** and
-**🎁 دعوت دوستان** and **🔊 تبدیل متن به صدا**. See [The menu](#the-menu).
+`/start`): **🎙 خلاصه پیام صوتی**, **🎙 تبدیل صدا به متن**, **📄 خلاصه جزوه
+PDF**, **📄 تبدیل متن PDF به متن**, **🌐 ترجمه و ساده‌سازی متن**, **🗜
+فشرده‌سازی عکس و PDF**, **💳 خرید اشتراک**, **🎁 دعوت دوستان**, **🔊 تبدیل متن
+به صدا** and **📝 تبدیل متن به فایل**. See [The menu](#the-menu).
 
 1. **Word export** — send any messy pasted text, get back a clean, RTL,
    properly fonted `.docx` file. Always free.
@@ -124,15 +125,18 @@ src/
   messages.js              /start and /help copy
   handlers/
     voice.js               Voice/audio message → transcript → summary → reply
+    voiceToText.js             Voice/audio message → raw verbatim transcript, no summary ("🎙 تبدیل صدا به متن")
     callbacks.js            "متن کامل" / "خروجی Word" (+ PDF-choice, + translate) button handling
     compress.js              Photo/document message → compressed file → reply
     menu.js                   The persistent menu: labels, keyboard, what each button does
     translate.js               Translate/simplify flow (inline buttons and the menu button)
     pdfSummary.js              PDF summary flow with live progress (inline buttons and the menu button)
+    pdfToText.js                Full extracted PDF text → always a Word file, no summary ("📄 تبدیل متن PDF به متن")
     payment.js                Paywall, receipt-photo forwarding to the admin, ✅/❌ approval buttons
     admin.js                   Admin-only /status and the "database is failing" alert
     referral.js                 Invite link/status (🎁 دعوت دوستان, /invite), /start ref_<code>, bonus and coupon notices
     audioVersion.js             The audio pipeline (gate, daily cap, synthesize, send voice, refund on failure) behind the "🔊 دریافت نسخه صوتی" button and "🔊 تبدیل متن به صدا"
+    textToFile.js               "📝 تبدیل متن به فایل": exports arbitrary text as a file (Word only for now)
   services/
     groqClient.js            Low-level Groq REST wrapper (auth, error normalization)
     transcribe.js             Whisper transcription (+ ffmpeg fallback)
@@ -188,18 +192,21 @@ restarts or run across multiple instances.
 `/start` shows the welcome text with a persistent reply keyboard (buttons
 under the message box, not attached to a message); `/help` shows the same
 keyboard again. Each button is an ordinary text message, so `bot.js` checks for
-the seven labels before treating text as "convert this to Word". `/invite` does
+the ten labels before treating text as "convert this to Word". `/invite` does
 the same as **🎁 دعوت دوستان**.
 
 | Button | What it does |
 | --- | --- |
 | 🎙 خلاصه پیام صوتی | Asks for a voice message; sending one runs the voice summary as always. |
+| 🎙 تبدیل صدا به متن | Your next voice message is transcribed and sent back verbatim, chunked if it's long, with a "خروجی Word" button — no summarization. |
 | 📄 خلاصه جزوه PDF | Your next PDF is summarized directly (no "summarize or compress?" question). |
+| 📄 تبدیل متن PDF به متن | Your next PDF's full text is extracted and always sent back as a Word file — no summarization, no length cap (there's no LLM call at all). |
 | 🌐 ترجمه و ساده‌سازی متن | Your next text is translated directly (no Word file), in the direction detected from the text: Persian to English, anything else to simplified Persian. |
 | 🗜 فشرده‌سازی عکس و PDF | Your next photo or PDF is compressed directly. |
 | 💳 خرید اشتراک | Price, card number and receipt instructions (or the subscription end date if already subscribed), plus your discount price if you hold a coupon. |
 | 🎁 دعوت دوستان | Your invite link, the rules, and your status (successful referrals, coupons, bonus requests). |
 | 🔊 تبدیل متن به صدا | Your next text is read aloud and sent back as a voice message (see [Text to speech](#text-to-speech-free-text)). |
+| 📝 تبدیل متن به فایل | Your next text is sent back as a Word file — an explicit, billable version of the free plain-text-to-Word flow below (see [Text and file conversions](#text-and-file-conversions)). |
 
 These "next message" choices last 10 minutes, are used once, and are dropped
 if you send anything that doesn't match (see `src/services/userMode.js`). With no
@@ -208,6 +215,33 @@ translate buttons, a PDF asks summarize-or-compress, a photo is compressed.
 One deliberate rule: after tapping **🗜**, a photo always means "compress",
 even if a payment is pending; otherwise a photo from a user who was just shown
 the paywall or the subscription screen is treated as a payment receipt.
+
+## Text and file conversions
+
+Three menu buttons convert between voice/PDF/text and a plain-text or Word
+output, with **no LLM call and no summarization** — they reuse the same
+transcription (`services/transcribe.js`), extraction (`services/pdfText.js`)
+and Word-export (`docGenerator.js`) building blocks as the summary features,
+just without the Groq chat-completion step. All three are billable (weekly
+free quota or a subscription), refunded if nothing is delivered, and count
+toward referral qualification, same as every other billable action.
+
+- **🎙 تبدیل صدا به متن** — the same duration/rate limits as the voice summary
+  apply (same underlying Whisper call), but the reply is the raw transcript,
+  chunked with `utils/textChunk.js` if it's over Telegram's message limit,
+  with a "خروجی Word" button under the last chunk.
+- **📄 تبدیل متن PDF به متن** — always a Word file of the full extracted text.
+  Unlike PDF *summarization*, there's no `MAX_DOCUMENT_CHARS_FOR_SUMMARY` cap
+  here: with no Groq call, there's no per-minute token budget to protect.
+- **📝 تبدیل متن به فایل** — Word only for now. A PDF option was evaluated
+  (see the design note in `src/handlers/textToFile.js`) and dropped: every
+  lightweight PDF-generation approach garbles mixed Persian/English text
+  (which this bot's own summaries produce on purpose), and a correct one needs
+  headless Chromium — real weight/RAM cost on Render's free tier. This button
+  is a separate, billable path from the free plain-text-to-Word flow that
+  every other text message already triggers (feature 1 in this README); tap
+  it when you specifically want the export to count as a premium action (for
+  example, to help an invited friend qualify your referral bonus).
 
 ## Long PDFs
 

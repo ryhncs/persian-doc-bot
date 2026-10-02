@@ -32,6 +32,10 @@ function createFakeStore({ failWith, pingWarnings = [] } = {}) {
       await guard();
       return { warnings: pingWarnings };
     },
+    async countUsers() {
+      await guard();
+      return rows.size;
+    },
     async getUser(id) {
       await guard();
       return copy(rows.get(id));

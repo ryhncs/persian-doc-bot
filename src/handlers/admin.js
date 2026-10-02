@@ -32,6 +32,9 @@ function buildStatusText(report, cfg = config, now = Date.now()) {
     return lines.join("\n");
   }
 
+  if (Number.isFinite(report.totalUsers)) {
+    lines.push(`• تعداد کل کاربران: ${formatNumber(report.totalUsers)}`);
+  }
   lines.push(`• سهمیه‌ی رایگان: ${formatNumber(report.limit)} درخواست در هفته`);
 
   const u = report.user;
